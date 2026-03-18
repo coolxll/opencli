@@ -44,7 +44,7 @@ Turn ANY Electron application into a CLI tool! Recombine, script, and extend app
 
 ## Prerequisites
 
-- **Node.js**: >= 18.0.0
+- **Node.js**: >= 20.0.0
 - **Chrome** running **and logged into the target site** (e.g. bilibili.com, zhihu.com, xiaohongshu.com).
 
 > **⚠️ Important**: Browser commands reuse your Chrome login session. You must be logged into the target website in Chrome before running commands. If you get empty data or errors, check your login status first.
@@ -303,7 +303,7 @@ npx vitest run tests/e2e/                    # E2E tests
 - **Empty data returns or 'Unauthorized' error**
   - Your login session in Chrome might have expired. Open a normal Chrome tab, navigate to the target site, and log in or refresh the page to prove you are human.
 - **Node API errors**
-  - Make sure you are using Node.js >= 18. Some dependencies require modern Node APIs.
+  - Make sure you are using Node.js >= 20. Some dependencies require modern Node APIs.
 - **Token issues**
   - Run `opencli doctor` to diagnose token configuration across all tools.
 
