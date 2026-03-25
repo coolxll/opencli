@@ -10,7 +10,7 @@ import chalk from 'chalk';
 import { type CliCommand, fullName, getRegistry, strategyLabel } from './registry.js';
 import { serializeCommand, formatArgSummary } from './serialization.js';
 import { render as renderOutput } from './output.js';
-import { extractBrowserEnvOverrides, getBrowserFactory, browserSession, withBrowserEnvOverrides } from './runtime.js';
+import { getBrowserFactory, browserSession, extractBrowserEnvOverrides, withBrowserEnvOverrides } from './runtime.js';
 import { PKG_VERSION } from './version.js';
 import { printCompletionScript } from './completion.js';
 import { loadExternalClis, executeExternalCli, installExternalCli, registerExternalCli, isBinaryInstalled } from './external.js';
@@ -133,8 +133,8 @@ export function runCli(BUILTIN_CLIS: string, USER_CLIS: string): void {
     .option('--wait <s>', '', '3')
     .option('--auto', 'Enable interactive fuzzing')
     .option('--click <labels>', 'Comma-separated labels to click before fuzzing')
-    .option('--cdp-endpoint <url>', 'Override the CDP endpoint for this command')
-    .option('--cdp-target <pattern>', 'Prefer a CDP target whose title or URL matches this pattern')
+    .option('--browser-cdp', 'Connect directly to a local Chrome CDP session and bypass the daemon/extension')
+    .option('--no-browser-cdp', 'Disable direct Chrome CDP mode for this command, even if enabled globally')
     .action(async (url, opts) => {
       await withBrowserEnvOverrides(extractBrowserEnvOverrides(opts), async () => {
         const { exploreUrl, renderExploreSummary } = await import('./explore.js');
@@ -171,8 +171,8 @@ export function runCli(BUILTIN_CLIS: string, USER_CLIS: string): void {
     .argument('<url>')
     .option('--goal <text>')
     .option('--site <name>')
-    .option('--cdp-endpoint <url>', 'Override the CDP endpoint for this command')
-    .option('--cdp-target <pattern>', 'Prefer a CDP target whose title or URL matches this pattern')
+    .option('--browser-cdp', 'Connect directly to a local Chrome CDP session and bypass the daemon/extension')
+    .option('--no-browser-cdp', 'Disable direct Chrome CDP mode for this command, even if enabled globally')
     .action(async (url, opts) => {
       await withBrowserEnvOverrides(extractBrowserEnvOverrides(opts), async () => {
         const { generateCliFromUrl, renderGenerateSummary } = await import('./generate.js');
@@ -199,8 +199,8 @@ export function runCli(BUILTIN_CLIS: string, USER_CLIS: string): void {
     .option('--out <dir>', 'Output directory for candidates')
     .option('--poll <ms>', 'Poll interval in milliseconds', '2000')
     .option('--timeout <ms>', 'Auto-stop after N milliseconds (default: 60000)', '60000')
-    .option('--cdp-endpoint <url>', 'Override the CDP endpoint for this command')
-    .option('--cdp-target <pattern>', 'Prefer a CDP target whose title or URL matches this pattern')
+    .option('--browser-cdp', 'Connect directly to a local Chrome CDP session and bypass the daemon/extension')
+    .option('--no-browser-cdp', 'Disable direct Chrome CDP mode for this command, even if enabled globally')
     .action(async (url, opts) => {
       await withBrowserEnvOverrides(extractBrowserEnvOverrides(opts), async () => {
         const { recordSession, renderRecordSummary } = await import('./record.js');
@@ -222,8 +222,8 @@ export function runCli(BUILTIN_CLIS: string, USER_CLIS: string): void {
     .description('Strategy cascade: find simplest working strategy')
     .argument('<url>')
     .option('--site <name>')
-    .option('--cdp-endpoint <url>', 'Override the CDP endpoint for this command')
-    .option('--cdp-target <pattern>', 'Prefer a CDP target whose title or URL matches this pattern')
+    .option('--browser-cdp', 'Connect directly to a local Chrome CDP session and bypass the daemon/extension')
+    .option('--no-browser-cdp', 'Disable direct Chrome CDP mode for this command, even if enabled globally')
     .action(async (url, opts) => {
       await withBrowserEnvOverrides(extractBrowserEnvOverrides(opts), async () => {
         const { cascadeProbe, renderCascadeResult } = await import('./cascade.js');
@@ -455,8 +455,8 @@ export function runCli(BUILTIN_CLIS: string, USER_CLIS: string): void {
     .command('serve')
     .description('Start Anthropic-compatible API proxy for Antigravity')
     .option('--port <port>', 'Server port (default: 8082)', '8082')
-    .option('--cdp-endpoint <url>', 'Override the CDP endpoint for this command')
-    .option('--cdp-target <pattern>', 'Prefer a CDP target whose title or URL matches this pattern')
+    .option('--browser-cdp', 'Auto-discover a local Chrome CDP session instead of requiring OPENCLI_CDP_ENDPOINT')
+    .option('--no-browser-cdp', 'Disable direct Chrome CDP mode for this command, even if enabled globally')
     .action(async (opts) => {
       await withBrowserEnvOverrides(extractBrowserEnvOverrides(opts), async () => {
         const { startServe } = await import('./clis/antigravity/serve.js');

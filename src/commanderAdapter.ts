@@ -45,9 +45,14 @@ export function registerCommandToProgram(siteCmd: Command, cmd: CliCommand): voi
     .option('-f, --format <fmt>', 'Output format: table, json, yaml, md, csv', 'table')
     .option('-v, --verbose', 'Debug output', false);
   if (cmd.browser) {
-    subCmd
-      .option('--cdp-endpoint <url>', 'Override the CDP endpoint for this command')
-      .option('--cdp-target <pattern>', 'Prefer a CDP target whose title or URL matches this pattern');
+    subCmd.option(
+      '--browser-cdp',
+      'Connect directly to a local Chrome CDP session and bypass the daemon/extension',
+    );
+    subCmd.option(
+      '--no-browser-cdp',
+      'Disable direct Chrome CDP mode for this command, even if enabled globally',
+    );
   }
 
   subCmd.addHelpText('after', formatRegistryHelpText(cmd));
@@ -75,8 +80,11 @@ export function registerCommandToProgram(siteCmd: Command, cmd: CliCommand): voi
       const verbose = optionsRecord.verbose === true;
       const format = typeof optionsRecord.format === 'string' ? optionsRecord.format : 'table';
       if (verbose) process.env.OPENCLI_VERBOSE = '1';
-      const browserEnv = extractBrowserEnvOverrides(optionsRecord);
-      const result = await withBrowserEnvOverrides(browserEnv, async () => executeCommand(cmd, kwargs, verbose));
+
+      const result = await withBrowserEnvOverrides(
+        extractBrowserEnvOverrides(optionsRecord),
+        () => executeCommand(cmd, kwargs, verbose),
+      );
 
       if (verbose && (!result || (Array.isArray(result) && result.length === 0))) {
         console.error(chalk.yellow('[Verbose] Warning: Command returned an empty result.'));
