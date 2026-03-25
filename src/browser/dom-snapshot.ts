@@ -386,7 +386,11 @@ export function generateSnapshotJs(opts: DomSnapshotOptions = {}): string {
 
   function isSearchElement(el) {
     // Check class names for search indicators
-    const className = el.className?.toLowerCase() || '';
+    const rawClassName =
+      typeof el.className === 'string'
+        ? el.className
+        : (typeof el.getAttribute === 'function' ? (el.getAttribute('class') || '') : '');
+    const className = rawClassName.toLowerCase();
     const classes = className.split(/\\s+/).filter(Boolean);
     for (const cls of classes) {
       const cleaned = cls.replace(/[^a-z0-9-]/g, '');

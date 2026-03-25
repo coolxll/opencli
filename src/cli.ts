@@ -16,7 +16,7 @@ import { PKG_VERSION } from './version.js';
 import { printCompletionScript } from './completion.js';
 import { loadExternalClis, executeExternalCli, installExternalCli, registerExternalCli, isBinaryInstalled } from './external.js';
 import { registerAllCommands } from './commanderAdapter.js';
-import { getErrorMessage } from './errors.js';
+import { CliError, ERROR_ICONS, getErrorMessage } from './errors.js';
 
 export function runCli(BUILTIN_CLIS: string, USER_CLIS: string): void {
   const program = new Command();
@@ -502,10 +502,112 @@ export function runCli(BUILTIN_CLIS: string, USER_CLIS: string): void {
       });
     });
 
+  const lingmaCmd = program.command('lingma').description('lingma commands');
+  addBrowserEnvOverrideOptions(
+    lingmaCmd
+    .command('serve')
+    .description('Start Anthropic-compatible API proxy for Lingma')
+    .option('--port <port>', 'Server port (default: 8083)', '8083')
+    .option('--session-mode <mode>', 'Session handling mode: auto, fresh, reuse', 'auto'),
+    { allowBrowserCdp: true },
+  )
+    .action(async (opts) => {
+      await runWithBrowserEnvOptions(opts, async () => {
+        const { startServe } = await import('./clis/lingma/serve.js');
+        await startServe({
+          port: parseInt(opts.port),
+          sessionMode: opts.sessionMode,
+        });
+      }, { allowBrowserCdp: true });
+    });
+
+  const lingmaIpcCmd = lingmaCmd.command('ipc').description('Lingma native IPC commands');
+
+  lingmaIpcCmd
+    .command('probe')
+    .description('Probe Lingma named-pipe IPC and summarize live capabilities')
+    .option('--pipe <path>', 'Explicit Lingma named pipe path (for example: \\\\.\\pipe\\lingma-xxxx)')
+    .option('-f, --format <fmt>', 'Output format: table, json, yaml, md, csv', 'table')
+    .option('-v, --verbose', 'Debug output', false)
+    .action(async (opts) => {
+      await runManualRenderedCommand(async () => {
+        const { probeLingmaIpc } = await import('./clis/lingma/ipc-probe.js');
+        const result = await probeLingmaIpc({ pipe: opts.pipe });
+        renderOutput(result, {
+          fmt: opts.format,
+          columns: ['Key', 'Value'],
+          title: 'lingma/ipc-probe',
+          source: 'opencli lingma ipc probe',
+        });
+      }, opts.verbose === true);
+    });
+
+  lingmaIpcCmd
+    .command('ask')
+    .description('Send a prompt through Lingma native IPC and wait for the streamed response')
+    .argument('<text>', 'Prompt text to send')
+    .option('--pipe <path>', 'Explicit Lingma named pipe path (for example: \\\\.\\pipe\\lingma-xxxx)')
+    .option('--session-id <id>', 'Reuse an existing Lingma ACP session id instead of creating a new one')
+    .option('--cwd <path>', 'Working directory used when creating a new IPC session', process.cwd())
+    .option('--current-file-path <path>', 'Current file path sent through ACP meta')
+    .option('--mode <mode>', 'ACP mode meta value (default: agent)', 'agent')
+    .option('--model <id>', 'Model id passed to session/set_model before prompting')
+    .option('--timeout <seconds>', 'Max seconds to wait for completion (default: 60)', '60')
+    .option('-f, --format <fmt>', 'Output format: table, json, yaml, md, csv', 'table')
+    .option('-v, --verbose', 'Debug output', false)
+    .action(async (text, opts) => {
+      await runManualRenderedCommand(async () => {
+        const { askLingmaIpc } = await import('./clis/lingma/ipc-ask.js');
+        const result = await askLingmaIpc({
+          text,
+          pipe: opts.pipe,
+          sessionId: opts.sessionId,
+          cwd: opts.cwd,
+          currentFilePath: opts.currentFilePath,
+          timeoutSeconds: parseInt(opts.timeout, 10) || 60,
+          mode: opts.mode,
+          model: opts.model,
+        });
+        renderOutput(result, {
+          fmt: opts.format,
+          columns: ['Role', 'Type', 'Text'],
+          title: 'lingma/ipc-ask',
+          source: 'opencli lingma ipc ask',
+        });
+      }, opts.verbose === true);
+    });
+
+  lingmaIpcCmd
+    .command('serve')
+    .description('Start Anthropic-compatible API proxy for Lingma over native IPC')
+    .option('--port <port>', 'Server port (default: 8084)', '8084')
+    .option('--session-mode <mode>', 'Session handling mode: auto, fresh, reuse', 'auto')
+    .option('--pipe <path>', 'Explicit Lingma named pipe path (for example: \\\\.\\pipe\\lingma-xxxx)')
+    .option('--cwd <path>', 'Working directory used when creating new IPC sessions', process.cwd())
+    .option('--current-file-path <path>', 'Current file path sent through ACP meta')
+    .option('--mode <mode>', 'ACP mode meta value (default: agent)', 'agent')
+    .option('--timeout <seconds>', 'Max seconds to wait for each completion (default: 120)', '120')
+    .option('-v, --verbose', 'Debug output', false)
+    .action(async (opts) => {
+      await runManualRenderedCommand(async () => {
+        const { startIpcServe } = await import('./clis/lingma/ipc-serve.js');
+        await startIpcServe({
+          port: parseInt(opts.port, 10) || 8084,
+          sessionMode: opts.sessionMode,
+          pipe: opts.pipe,
+          cwd: opts.cwd,
+          currentFilePath: opts.currentFilePath,
+          timeoutSeconds: parseInt(opts.timeout, 10) || 120,
+          mode: opts.mode,
+        });
+      }, opts.verbose === true);
+    });
+
   // ── Dynamic adapter commands ──────────────────────────────────────────────
 
   const siteGroups = new Map<string, Command>();
   siteGroups.set('antigravity', antigravityCmd);
+  siteGroups.set('lingma', lingmaCmd);
   registerAllCommands(program, siteGroups);
 
   // ── Unknown command fallback ──────────────────────────────────────────────
@@ -526,6 +628,32 @@ export function runCli(BUILTIN_CLIS: string, USER_CLIS: string): void {
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
+
+async function runManualRenderedCommand(
+  fn: () => Promise<void>,
+  verbose: boolean = false,
+): Promise<void> {
+  try {
+    await fn();
+  } catch (err) {
+    if (err instanceof CliError) {
+      const icon = ERROR_ICONS[err.code] ?? '⚠️';
+      console.error(chalk.red(`${icon} ${err.message}`));
+      if (err.hint) console.error(chalk.yellow(`→ ${err.hint}`));
+      process.exitCode = 1;
+      return;
+    }
+
+    if (verbose && err instanceof Error && err.stack) {
+      console.error(chalk.red(err.stack));
+      process.exitCode = 1;
+      return;
+    }
+
+    console.error(chalk.red(`Error: ${getErrorMessage(err)}`));
+    process.exitCode = 1;
+  }
+}
 
 /** Infer a workspace-friendly hostname from a URL, with site override. */
 function inferHost(url: string, site?: string): string {

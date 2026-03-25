@@ -74,6 +74,7 @@ Run `opencli list` for the live registry.
 | **[Cursor](/adapters/desktop/cursor)** | Control Cursor IDE | `status` `send` `read` `new` `dump` `composer` `model` `extract-code` `ask` `screenshot` `history` `export` |
 | **[Codex](/adapters/desktop/codex)** | Drive OpenAI Codex CLI agent | `status` `send` `read` `new` `extract-diff` `model` `ask` `screenshot` `history` `export` |
 | **[Antigravity](/adapters/desktop/antigravity)** | Control Antigravity Ultra | `status` `send` `read` `new` `dump` `extract-code` `model` `watch` |
+| **[Lingma](/adapters/desktop/lingma)** | Control Lingma Desktop | `status` `send` `read` `new` `dump` `screenshot` `ask` `model` `probe-network` |
 | **[ChatGPT](/adapters/desktop/chatgpt)** | Automate ChatGPT macOS app | `status` `new` `send` `read` `ask` |
 | **[ChatWise](/adapters/desktop/chatwise)** | Multi-LLM client | `status` `new` `send` `read` `ask` `model` `history` `export` `screenshot` |
 | **[Notion](/adapters/desktop/notion)** | Search, read, write pages | `status` `search` `read` `new` `write` `sidebar` `favorites` `export` |

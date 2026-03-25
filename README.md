@@ -151,6 +151,7 @@ Run `opencli list` for the live registry.
 | **v2ex** | `hot` `latest` `topic` `node` `user` `member` `replies` `nodes` `daily` `me` `notifications` | Public / Browser |
 | **xueqiu** | `feed` `hot-stock` `hot` `search` `stock` `watchlist` `earnings-date` `fund-holdings` `fund-snapshot` | Browser |
 | **antigravity** | `status` `send` `read` `new` `dump` `extract-code` `model` `watch` | Desktop |
+| **lingma** | `status` `send` `read` `new` `dump` `screenshot` `ask` `model` `probe-network` | Desktop |
 | **chatgpt** | `status` `new` `send` `read` `ask` `model` | Desktop |
 | **xiaohongshu** | `search` `notifications` `feed` `user` `download` `publish` `creator-notes` `creator-note-detail` `creator-notes-summary` `creator-profile` `creator-stats` | Browser |
 | **apple-podcasts** | `search` `episodes` `top` | Public |
@@ -236,6 +237,7 @@ If you want to add support for a new Electron desktop app, start with [docs/guid
 | **Cursor** | Control Cursor IDE — Composer, chat, code extraction | [Doc](./docs/adapters/desktop/cursor.md) |
 | **Codex** | Drive OpenAI Codex CLI agent headlessly | [Doc](./docs/adapters/desktop/codex.md) |
 | **Antigravity** | Control Antigravity Ultra from terminal | [Doc](./docs/adapters/desktop/antigravity.md) |
+| **Lingma** | Control Lingma Desktop via CDP or native IPC | [Doc](./docs/adapters/desktop/lingma.md) |
 | **ChatGPT** | Automate ChatGPT macOS desktop app | [Doc](./docs/adapters/desktop/chatgpt.md) |
 | **ChatWise** | Multi-LLM client (GPT-4, Claude, Gemini) | [Doc](./docs/adapters/desktop/chatwise.md) |
 | **Notion** | Search, read, write Notion pages | [Doc](./docs/adapters/desktop/notion.md) |

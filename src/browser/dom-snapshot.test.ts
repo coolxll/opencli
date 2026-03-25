@@ -272,6 +272,12 @@ describe('Search Element Detection', () => {
     expect(js).toContain('data-');
   });
 
+  it('guards against non-string className values', () => {
+    const js = generateSnapshotJs();
+    expect(js).toContain("typeof el.className === 'string'");
+    expect(js).toContain("el.getAttribute('class')");
+  });
+
   it('checks label wrapper detection in isInteractive', () => {
     const js = generateSnapshotJs();
     // Label elements without "for" attribute should check for form control descendants
