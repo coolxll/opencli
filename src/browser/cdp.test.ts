@@ -36,7 +36,7 @@ vi.mock('ws', () => ({
   WebSocket: MockWebSocket,
 }));
 
-import { CDPBridge } from './cdp.js';
+import { CDPBridge, __test__ } from './cdp.js';
 
 describe('CDPBridge cookies', () => {
   beforeEach(() => {
@@ -62,5 +62,45 @@ describe('CDPBridge cookies', () => {
       { name: 'good', value: '1', domain: '.example.com' },
       { name: 'exact', value: '2', domain: 'example.com' },
     ]);
+  });
+});
+
+describe('CDP browser websocket helpers', () => {
+  beforeEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('accepts browser-level targets that only expose targetId', () => {
+    const target = __test__.selectCDPTarget([
+      {
+        targetId: 'page-1',
+        type: 'page',
+        title: 'Hacker News',
+        url: 'https://news.ycombinator.com/',
+      },
+      {
+        targetId: 'devtools-1',
+        type: 'page',
+        title: 'DevTools - localhost:9222',
+        url: 'devtools://devtools/bundled/inspector.html',
+      },
+    ]);
+
+    expect(target?.targetId).toBe('page-1');
+  });
+
+  it('parses browser websocket URLs from DevToolsActivePort content', () => {
+    const wsUrl = __test__.parseBrowserWebSocketUrlFromActivePort(
+      '9222',
+      '127.0.0.1',
+      '9222\n/devtools/browser/abc-123\n',
+    );
+
+    expect(wsUrl).toBe('ws://127.0.0.1:9222/devtools/browser/abc-123');
+  });
+
+  it('detects browser-level websocket endpoints', () => {
+    expect(__test__.isBrowserLevelWebSocket('ws://127.0.0.1:9222/devtools/browser/abc')).toBe(true);
+    expect(__test__.isBrowserLevelWebSocket('ws://127.0.0.1:9222/devtools/page/abc')).toBe(false);
   });
 });
