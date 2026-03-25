@@ -34,6 +34,30 @@ describe('runtime browser CDP overrides', () => {
     expect(process.env.OPENCLI_CDP_ENDPOINT).toBeUndefined();
   });
 
+  it('uses global OPENCLI_BROWSER_CDP=1 when no per-command override is provided', async () => {
+    vi.stubEnv('OPENCLI_BROWSER_CDP', '1');
+
+    let seenEndpoint: string | undefined;
+    await withBrowserEnvOverrides({}, async () => {
+      seenEndpoint = process.env.OPENCLI_CDP_ENDPOINT;
+    });
+
+    expect(seenEndpoint).toBe('auto');
+    expect(process.env.OPENCLI_CDP_ENDPOINT).toBeUndefined();
+  });
+
+  it('lets an explicit command option disable a global browser CDP default', async () => {
+    vi.stubEnv('OPENCLI_BROWSER_CDP', '1');
+
+    let seenEndpoint: string | undefined;
+    await withBrowserEnvOverrides({ browserCdp: false }, async () => {
+      seenEndpoint = process.env.OPENCLI_CDP_ENDPOINT;
+    });
+
+    expect(seenEndpoint).toBeUndefined();
+    expect(process.env.OPENCLI_CDP_ENDPOINT).toBeUndefined();
+  });
+
   it('does not overwrite an explicit CDP endpoint', async () => {
     vi.stubEnv('OPENCLI_CDP_ENDPOINT', 'http://127.0.0.1:9222');
 

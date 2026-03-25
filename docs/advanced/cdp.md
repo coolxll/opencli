@@ -112,3 +112,11 @@ opencli explore https://linux.do --browser-cdp
 ```
 
 When this flag is present, OpenCLI forces the browser command through Chrome CDP directly. If `OPENCLI_CDP_ENDPOINT` is not already set, OpenCLI will try to auto-discover a local Chrome/Edge debugging session from `DevToolsActivePort`.
+
+If you want this behavior globally, set:
+
+```bash
+export OPENCLI_BROWSER_CDP=1
+```
+
+With that environment variable enabled, browser-backed commands use the same direct-CDP path by default. You can still disable it for one command with `--no-browser-cdp`.

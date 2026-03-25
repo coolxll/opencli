@@ -24,7 +24,7 @@ export async function withBrowserEnvOverrides<T>(
   overrides: BrowserEnvOverrides,
   fn: () => Promise<T>,
 ): Promise<T> {
-  if (!overrides.browserCdp || process.env.OPENCLI_CDP_ENDPOINT) {
+  if (!isBrowserCdpEnabled(overrides) || process.env.OPENCLI_CDP_ENDPOINT) {
     return fn();
   }
 
@@ -41,15 +41,32 @@ export async function withBrowserEnvOverrides<T>(
   }
 }
 
+function isBrowserCdpEnabled(overrides: BrowserEnvOverrides): boolean {
+  if (typeof overrides.browserCdp === 'boolean') {
+    return overrides.browserCdp;
+  }
+  return readBooleanEnv('OPENCLI_BROWSER_CDP') ?? false;
+}
+
 function readBooleanOption(options: Record<string, unknown>, names: string[]): boolean | undefined {
   for (const name of names) {
     const value = options[name];
-    if (typeof value === 'boolean') return value;
-    if (typeof value === 'string') {
-      const normalized = value.trim().toLowerCase();
-      if (normalized === 'true' || normalized === '1') return true;
-      if (normalized === 'false' || normalized === '0') return false;
-    }
+    const parsed = parseBooleanValue(value);
+    if (parsed !== undefined) return parsed;
+  }
+  return undefined;
+}
+
+function readBooleanEnv(name: string): boolean | undefined {
+  return parseBooleanValue(process.env[name]);
+}
+
+function parseBooleanValue(value: unknown): boolean | undefined {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === 'true' || normalized === '1' || normalized === 'yes' || normalized === 'on') return true;
+    if (normalized === 'false' || normalized === '0' || normalized === 'no' || normalized === 'off') return false;
   }
   return undefined;
 }

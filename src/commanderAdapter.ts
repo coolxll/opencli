@@ -48,7 +48,10 @@ export function registerCommandToProgram(siteCmd: Command, cmd: CliCommand): voi
     subCmd.option(
       '--browser-cdp',
       'Connect directly to a local Chrome CDP session and bypass the daemon/extension',
-      false,
+    );
+    subCmd.option(
+      '--no-browser-cdp',
+      'Disable direct Chrome CDP mode for this command, even if enabled globally',
     );
   }
 
