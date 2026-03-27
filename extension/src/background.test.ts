@@ -139,6 +139,50 @@ describe('background tab isolation', () => {
     expect(create).toHaveBeenCalledWith({ windowId: 1, url: 'https://new.example', active: true });
   });
 
+  it('recovers a missing workspace session from an explicit debuggable tab id', async () => {
+    const { chrome, tabs } = createChromeMock();
+    tabs[0].url = 'https://example.com/';
+    tabs[0].title = 'Example Domain';
+    tabs[0].status = 'complete';
+    vi.stubGlobal('chrome', chrome);
+
+    const mod = await import('./background');
+    mod.__test__.setAutomationWindowId('site:probe', null);
+
+    const result = await mod.__test__.handleExec({
+      id: 'recover-session',
+      action: 'exec',
+      workspace: 'site:probe',
+      tabId: 1,
+      code: 'window.location.href',
+    }, 'site:probe');
+
+    expect(result.ok).toBe(true);
+    expect(mod.__test__.getAutomationWindowId('site:probe')).toBe(1);
+  });
+
+  it('rebinds the workspace session to an explicit debuggable tab even if the stored window differs', async () => {
+    const { chrome, tabs } = createChromeMock();
+    tabs[0].url = 'https://example.com/';
+    tabs[0].title = 'Example Domain';
+    tabs[0].status = 'complete';
+    vi.stubGlobal('chrome', chrome);
+
+    const mod = await import('./background');
+    mod.__test__.setAutomationWindowId('site:probe', 99);
+
+    const result = await mod.__test__.handleExec({
+      id: 'rebind-session',
+      action: 'exec',
+      workspace: 'site:probe',
+      tabId: 1,
+      code: 'window.location.href',
+    }, 'site:probe');
+
+    expect(result.ok).toBe(true);
+    expect(mod.__test__.getAutomationWindowId('site:probe')).toBe(1);
+  });
+
   it('treats normalized same-url navigate as already complete', async () => {
     const { chrome, tabs, update } = createChromeMock();
     tabs[0].url = 'https://www.bilibili.com/';
@@ -165,6 +209,31 @@ describe('background tab isolation', () => {
       },
     });
     expect(update).not.toHaveBeenCalled();
+  });
+
+  it('fails navigate when the tab times out and stays on the internal blank page', async () => {
+    vi.useFakeTimers();
+    const { chrome, tabs } = createChromeMock();
+    tabs[0].url = 'data:text/html,<html></html>';
+    tabs[0].title = 'blank';
+    tabs[0].status = 'complete';
+    vi.stubGlobal('chrome', chrome);
+
+    const mod = await import('./background');
+    mod.__test__.setAutomationWindowId('site:v2ex', 1);
+
+    const promise = mod.__test__.handleNavigate(
+      { id: 'blank-timeout', action: 'navigate', url: 'https://www.v2ex.com', workspace: 'site:v2ex' },
+      'site:v2ex',
+    );
+
+    await vi.advanceTimersByTimeAsync(15_100);
+
+    await expect(promise).resolves.toEqual({
+      id: 'blank-timeout',
+      ok: false,
+      error: 'Navigation to https://www.v2ex.com timed out and stayed on data:text/html,<html></html>',
+    });
   });
 
   it('keeps hash routes distinct when comparing target URLs', async () => {

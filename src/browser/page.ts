@@ -28,6 +28,14 @@ import {
   waitForDomStableJs,
 } from './dom-helpers.js';
 
+const BLANK_PAGE = 'data:text/html,<html></html>';
+
+type NavigateResult = {
+  tabId?: number;
+  url?: string;
+  timedOut?: boolean;
+};
+
 /**
  * Page — implements IPage by talking to the daemon via HTTP.
  */
@@ -54,7 +62,8 @@ export class Page implements IPage {
     const result = await sendCommand('navigate', {
       url,
       ...this._cmdOpts(),
-    }) as { tabId?: number };
+    }) as NavigateResult;
+    ensureNavigationSucceeded(url, result);
     // Remember the tabId for subsequent exec calls
     if (result?.tabId) {
       this._tabId = result.tabId;
@@ -287,3 +296,10 @@ export class Page implements IPage {
 }
 
 // (End of file)
+
+function ensureNavigationSucceeded(targetUrl: string, result: NavigateResult | undefined): void {
+  const finalUrl = typeof result?.url === 'string' ? result.url : undefined;
+  if (finalUrl === BLANK_PAGE) {
+    throw new Error(`Navigation failed for ${targetUrl}: browser remained on ${BLANK_PAGE}`);
+  }
+}
