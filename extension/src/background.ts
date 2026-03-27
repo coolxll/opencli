@@ -295,14 +295,17 @@ async function resolveTabId(tabId: number | undefined, workspace: string): Promi
   if (tabId !== undefined) {
     try {
       const tab = await chrome.tabs.get(tabId);
-      const session = automationSessions.get(workspace);
-      if (isDebuggableUrl(tab.url) && session && tab.windowId === session.windowId) return tabId;
-      if (session && tab.windowId !== session.windowId) {
-        console.warn(`[opencli] Tab ${tabId} belongs to window ${tab.windowId}, not automation window ${session.windowId}, re-resolving`);
-      } else if (!isDebuggableUrl(tab.url)) {
-        // Tab exists but URL is not debuggable — fall through to auto-resolve
-        console.warn(`[opencli] Tab ${tabId} URL is not debuggable (${tab.url}), re-resolving`);
+      if (isDebuggableUrl(tab.url)) {
+        automationSessions.set(workspace, {
+          windowId: tab.windowId,
+          idleTimer: null,
+          idleDeadlineAt: Date.now() + WINDOW_IDLE_TIMEOUT,
+        });
+        resetWindowIdleTimer(workspace);
+        console.log(`[opencli] Bound automation session ${tab.windowId} (${workspace}) to tab ${tabId}`);
+        return tabId;
       }
+      console.warn(`[opencli] Tab ${tabId} URL is not debuggable (${tab.url}), re-resolving`);
     } catch {
       // Tab was closed — fall through to auto-resolve
       console.warn(`[opencli] Tab ${tabId} no longer exists, re-resolving`);
@@ -444,6 +447,13 @@ async function handleNavigate(cmd: Command, workspace: string): Promise<Result> 
   });
 
   const tab = await chrome.tabs.get(tabId);
+  if (timedOut && normalizeUrlForComparison(tab.url) === beforeNormalized) {
+    return {
+      id: cmd.id,
+      ok: false,
+      error: `Navigation to ${targetUrl} timed out and stayed on ${tab.url ?? 'an unknown page'}`,
+    };
+  }
   return {
     id: cmd.id,
     ok: true,
