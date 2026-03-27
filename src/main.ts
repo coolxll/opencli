@@ -19,8 +19,11 @@ import { fileURLToPath } from 'node:url';
 import { discoverClis, discoverPlugins } from './discovery.js';
 import { getCompletions } from './completion.js';
 import { runCli } from './cli.js';
+import { maybeRelaunchWithEnvProxy } from './env-proxy.js';
 import { emitHook } from './hooks.js';
 import { registerUpdateNoticeOnExit, checkForUpdateBackground } from './update-check.js';
+
+maybeRelaunchWithEnvProxy();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
