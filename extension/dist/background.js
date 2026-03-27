@@ -171,6 +171,10 @@ function connect() {
 			clearTimeout(reconnectTimer);
 			reconnectTimer = null;
 		}
+		ws?.send(JSON.stringify({
+			type: "hello",
+			version: chrome.runtime.getManifest().version
+		}));
 	};
 	ws.onmessage = async (event) => {
 		try {
@@ -207,6 +211,8 @@ function scheduleReconnect() {
 }
 var automationSessions = /* @__PURE__ */ new Map();
 var WINDOW_IDLE_TIMEOUT = 12e4;
+var AUTOMATION_WINDOW_WIDTH = 1280;
+var AUTOMATION_WINDOW_HEIGHT = 900;
 function getWorkspaceKey(workspace) {
 	return workspace?.trim() || "default";
 }
@@ -235,13 +241,7 @@ async function getAutomationWindow(workspace) {
 		automationSessions.delete(workspace);
 	}
 	const session = {
-		windowId: (await chrome.windows.create({
-			url: BLANK_PAGE,
-			focused: false,
-			width: 1280,
-			height: 900,
-			type: "normal"
-		})).id,
+		windowId: (await createAutomationWindowQuietly()).id,
 		idleTimer: null,
 		idleDeadlineAt: Date.now() + WINDOW_IDLE_TIMEOUT
 	};
@@ -250,6 +250,24 @@ async function getAutomationWindow(workspace) {
 	resetWindowIdleTimer(workspace);
 	await new Promise((resolve) => setTimeout(resolve, 200));
 	return session.windowId;
+}
+async function createAutomationWindowQuietly() {
+	try {
+		return await chrome.windows.create({
+			url: BLANK_PAGE,
+			focused: false,
+			state: "minimized",
+			type: "normal"
+		});
+	} catch {
+		return await chrome.windows.create({
+			url: BLANK_PAGE,
+			focused: false,
+			width: AUTOMATION_WINDOW_WIDTH,
+			height: AUTOMATION_WINDOW_HEIGHT,
+			type: "normal"
+		});
+	}
 }
 chrome.windows.onRemoved.addListener((windowId) => {
 	for (const [workspace, session] of automationSessions.entries()) if (session.windowId === windowId) {
@@ -335,6 +353,13 @@ function normalizeUrlForComparison(url) {
 function isTargetUrl(currentUrl, targetUrl) {
 	return normalizeUrlForComparison(currentUrl) === normalizeUrlForComparison(targetUrl);
 }
+function getAutomationSessionForWindow(windowId) {
+	for (const [workspace, session] of automationSessions.entries()) if (session.windowId === windowId) return {
+		workspace,
+		session
+	};
+	return null;
+}
 /**
 * Resolve target tab in the automation window.
 * If explicit tabId is given, use that directly.
@@ -344,13 +369,12 @@ async function resolveTabId(tabId, workspace) {
 	if (tabId !== void 0) try {
 		const tab = await chrome.tabs.get(tabId);
 		if (isDebuggableUrl(tab.url)) {
-			automationSessions.set(workspace, {
-				windowId: tab.windowId,
-				idleTimer: null,
-				idleDeadlineAt: Date.now() + WINDOW_IDLE_TIMEOUT
-			});
-			resetWindowIdleTimer(workspace);
-			console.log(`[opencli] Bound automation session ${tab.windowId} (${workspace}) to tab ${tabId}`);
+			const tracked = getAutomationSessionForWindow(tab.windowId);
+			if (tracked?.workspace === workspace) {
+				resetWindowIdleTimer(workspace);
+				console.log(`[opencli] Reused automation tab ${tabId} in window ${tab.windowId} (${workspace})`);
+			} else if (tracked) console.log(`[opencli] Using tab ${tabId} from automation window ${tab.windowId} owned by ${tracked.workspace}`);
+			else console.log(`[opencli] Using explicit tab ${tabId} in non-automation window ${tab.windowId} without binding workspace ${workspace}`);
 			return tabId;
 		}
 		console.warn(`[opencli] Tab ${tabId} URL is not debuggable (${tab.url}), re-resolving`);
@@ -374,10 +398,24 @@ async function resolveTabId(tabId, workspace) {
 	const newTab = await chrome.tabs.create({
 		windowId,
 		url: BLANK_PAGE,
-		active: true
+		active: false
 	});
 	if (!newTab.id) throw new Error("Failed to create tab in automation window");
 	return newTab.id;
+}
+async function resolveAutomationTabId(tabId, workspace) {
+	if (tabId === void 0) return resolveTabId(void 0, workspace);
+	let tab;
+	try {
+		tab = await chrome.tabs.get(tabId);
+	} catch {
+		throw new Error(`Tab ${tabId} no longer exists`);
+	}
+	const session = automationSessions.get(workspace);
+	if (!session || tab.windowId !== session.windowId) throw new Error(`Tab ${tabId} is not in the automation window`);
+	if (!isDebuggableUrl(tab.url)) throw new Error(`Tab ${tabId} URL is not debuggable (${tab.url ?? "unknown"})`);
+	resetWindowIdleTimer(workspace);
+	return tabId;
 }
 async function listAutomationTabs(workspace) {
 	const session = automationSessions.get(workspace);
@@ -517,7 +555,7 @@ async function handleTabs(cmd, workspace) {
 			const tab = await chrome.tabs.create({
 				windowId,
 				url: cmd.url ?? BLANK_PAGE,
-				active: true
+				active: false
 			});
 			return {
 				id: cmd.id,
@@ -544,7 +582,7 @@ async function handleTabs(cmd, workspace) {
 					data: { closed: target.id }
 				};
 			}
-			const tabId = await resolveTabId(cmd.tabId, workspace);
+			const tabId = await resolveAutomationTabId(cmd.tabId, workspace);
 			await chrome.tabs.remove(tabId);
 			await detach(tabId);
 			return {

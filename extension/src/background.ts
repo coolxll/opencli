@@ -107,6 +107,8 @@ type AutomationSession = {
 
 const automationSessions = new Map<string, AutomationSession>();
 const WINDOW_IDLE_TIMEOUT = 120000; // 120s — longer to survive slow pipelines
+const AUTOMATION_WINDOW_WIDTH = 1280;
+const AUTOMATION_WINDOW_HEIGHT = 900;
 
 function getWorkspaceKey(workspace?: string): string {
   return workspace?.trim() || 'default';
@@ -144,15 +146,7 @@ async function getAutomationWindow(workspace: string): Promise<number> {
     }
   }
 
-  // Create a new window with a data: URI that New Tab Override extensions cannot intercept.
-  // Using about:blank would be hijacked by extensions like "New Tab Override".
-  const win = await chrome.windows.create({
-    url: BLANK_PAGE,
-    focused: false,
-    width: 1280,
-    height: 900,
-    type: 'normal',
-  });
+  const win = await createAutomationWindowQuietly();
   const session: AutomationSession = {
     windowId: win.id!,
     idleTimer: null,
@@ -164,6 +158,28 @@ async function getAutomationWindow(workspace: string): Promise<number> {
   // Brief delay to let Chrome load the initial data: URI tab
   await new Promise(resolve => setTimeout(resolve, 200));
   return session.windowId;
+}
+
+async function createAutomationWindowQuietly(): Promise<chrome.windows.Window> {
+  // Create the automation window minimized so normal commands stay out of the
+  // user's foreground workflow. If Chrome rejects the minimized create flow,
+  // fall back to a normal background window.
+  try {
+    return await chrome.windows.create({
+      url: BLANK_PAGE,
+      focused: false,
+      state: 'minimized',
+      type: 'normal',
+    });
+  } catch {
+    return await chrome.windows.create({
+      url: BLANK_PAGE,
+      focused: false,
+      width: AUTOMATION_WINDOW_WIDTH,
+      height: AUTOMATION_WINDOW_HEIGHT,
+      type: 'normal',
+    });
+  }
 }
 
 // Clean up when the automation window is closed
@@ -283,6 +299,13 @@ function isTargetUrl(currentUrl: string | undefined, targetUrl: string): boolean
   return normalizeUrlForComparison(currentUrl) === normalizeUrlForComparison(targetUrl);
 }
 
+function getAutomationSessionForWindow(windowId: number): { workspace: string; session: AutomationSession } | null {
+  for (const [workspace, session] of automationSessions.entries()) {
+    if (session.windowId === windowId) return { workspace, session };
+  }
+  return null;
+}
+
 /**
  * Resolve target tab in the automation window.
  * If explicit tabId is given, use that directly.
@@ -296,13 +319,15 @@ async function resolveTabId(tabId: number | undefined, workspace: string): Promi
     try {
       const tab = await chrome.tabs.get(tabId);
       if (isDebuggableUrl(tab.url)) {
-        automationSessions.set(workspace, {
-          windowId: tab.windowId,
-          idleTimer: null,
-          idleDeadlineAt: Date.now() + WINDOW_IDLE_TIMEOUT,
-        });
-        resetWindowIdleTimer(workspace);
-        console.log(`[opencli] Bound automation session ${tab.windowId} (${workspace}) to tab ${tabId}`);
+        const tracked = getAutomationSessionForWindow(tab.windowId);
+        if (tracked?.workspace === workspace) {
+          resetWindowIdleTimer(workspace);
+          console.log(`[opencli] Reused automation tab ${tabId} in window ${tab.windowId} (${workspace})`);
+        } else if (tracked) {
+          console.log(`[opencli] Using tab ${tabId} from automation window ${tab.windowId} owned by ${tracked.workspace}`);
+        } else {
+          console.log(`[opencli] Using explicit tab ${tabId} in non-automation window ${tab.windowId} without binding workspace ${workspace}`);
+        }
         return tabId;
       }
       console.warn(`[opencli] Tab ${tabId} URL is not debuggable (${tab.url}), re-resolving`);
@@ -336,9 +361,32 @@ async function resolveTabId(tabId: number | undefined, workspace: string): Promi
   }
 
   // Fallback: create a new tab
-  const newTab = await chrome.tabs.create({ windowId, url: BLANK_PAGE, active: true });
+  const newTab = await chrome.tabs.create({ windowId, url: BLANK_PAGE, active: false });
   if (!newTab.id) throw new Error('Failed to create tab in automation window');
   return newTab.id;
+}
+
+async function resolveAutomationTabId(tabId: number | undefined, workspace: string): Promise<number> {
+  if (tabId === undefined) return resolveTabId(undefined, workspace);
+
+  let tab: chrome.tabs.Tab;
+  try {
+    tab = await chrome.tabs.get(tabId);
+  } catch {
+    throw new Error(`Tab ${tabId} no longer exists`);
+  }
+
+  const session = automationSessions.get(workspace);
+  if (!session || tab.windowId !== session.windowId) {
+    throw new Error(`Tab ${tabId} is not in the automation window`);
+  }
+
+  if (!isDebuggableUrl(tab.url)) {
+    throw new Error(`Tab ${tabId} URL is not debuggable (${tab.url ?? 'unknown'})`);
+  }
+
+  resetWindowIdleTimer(workspace);
+  return tabId;
 }
 
 async function listAutomationTabs(workspace: string): Promise<chrome.tabs.Tab[]> {
@@ -480,7 +528,7 @@ async function handleTabs(cmd: Command, workspace: string): Promise<Result> {
         return { id: cmd.id, ok: false, error: 'Blocked URL scheme -- only http:// and https:// are allowed' };
       }
       const windowId = await getAutomationWindow(workspace);
-      const tab = await chrome.tabs.create({ windowId, url: cmd.url ?? BLANK_PAGE, active: true });
+      const tab = await chrome.tabs.create({ windowId, url: cmd.url ?? BLANK_PAGE, active: false });
       return { id: cmd.id, ok: true, data: { tabId: tab.id, url: tab.url } };
     }
     case 'close': {
@@ -492,7 +540,7 @@ async function handleTabs(cmd: Command, workspace: string): Promise<Result> {
         await executor.detach(target.id);
         return { id: cmd.id, ok: true, data: { closed: target.id } };
       }
-      const tabId = await resolveTabId(cmd.tabId, workspace);
+      const tabId = await resolveAutomationTabId(cmd.tabId, workspace);
       await chrome.tabs.remove(tabId);
       await executor.detach(tabId);
       return { id: cmd.id, ok: true, data: { closed: tabId } };
@@ -585,8 +633,11 @@ async function handleSessions(cmd: Command): Promise<Result> {
 }
 
 export const __test__ = {
+  handleExec,
   handleNavigate,
   isTargetUrl,
+  resolveTabId,
+  resolveAutomationTabId,
   handleTabs,
   handleSessions,
   getAutomationWindowId: (workspace: string = 'default') => automationSessions.get(workspace)?.windowId ?? null,

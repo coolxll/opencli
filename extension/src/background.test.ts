@@ -27,6 +27,13 @@ class MockWebSocket {
   }
 }
 
+vi.mock('./cdp', () => ({
+  registerListeners: vi.fn(),
+  evaluateAsync: vi.fn(async (_tabId: number, code: string) => code),
+  detach: vi.fn(async (_tabId?: number) => {}),
+  screenshot: vi.fn(async (_tabId: number, _opts?: unknown) => 'mock-screenshot'),
+}));
+
 function createChromeMock() {
   let nextTabId = 10;
   const tabs: MockTab[] = [
@@ -73,7 +80,7 @@ function createChromeMock() {
     },
     windows: {
       get: vi.fn(async (windowId: number) => ({ id: windowId })),
-      create: vi.fn(async ({ url, focused, width, height, type }: any) => ({ id: 1, url, focused, width, height, type })),
+      create: vi.fn(async ({ url, focused, width, height, type, state }: any) => ({ id: 1, url, focused, width, height, type, state })),
       remove: vi.fn(async (_windowId: number) => {}),
       onRemoved: { addListener: vi.fn() } as Listener<(windowId: number) => void>,
     },
@@ -84,6 +91,8 @@ function createChromeMock() {
     runtime: {
       onInstalled: { addListener: vi.fn() } as Listener<() => void>,
       onStartup: { addListener: vi.fn() } as Listener<() => void>,
+      onMessage: { addListener: vi.fn() } as Listener<(msg: unknown, sender: unknown, sendResponse: (value: unknown) => void) => void>,
+      getManifest: vi.fn(() => ({ version: '1.4.1-test' })),
     },
     cookies: {
       getAll: vi.fn(async () => []),
@@ -136,24 +145,69 @@ describe('background tab isolation', () => {
     const result = await mod.__test__.handleTabs({ id: '2', action: 'tabs', op: 'new', url: 'https://new.example', workspace: 'site:twitter' }, 'site:twitter');
 
     expect(result.ok).toBe(true);
-    expect(create).toHaveBeenCalledWith({ windowId: 1, url: 'https://new.example', active: true });
+    expect(create).toHaveBeenCalledWith({ windowId: 1, url: 'https://new.example', active: false });
   });
 
-  it('recovers a missing workspace session from an explicit debuggable tab id', async () => {
+  it('creates automation windows minimized to avoid stealing foreground focus', async () => {
+    const { chrome } = createChromeMock();
+    vi.stubGlobal('chrome', chrome);
+
+    const mod = await import('./background');
+
+    const result = await mod.__test__.handleTabs({
+      id: 'new-window',
+      action: 'tabs',
+      op: 'new',
+      url: 'https://new.example',
+      workspace: 'site:quiet',
+    }, 'site:quiet');
+
+    expect(result.ok).toBe(true);
+    expect(chrome.windows.create).toHaveBeenCalledWith({
+      url: 'data:text/html,<html></html>',
+      focused: false,
+      state: 'minimized',
+      type: 'normal',
+    });
+  });
+
+  it('does not bind a non-automation tab to the workspace session', async () => {
     const { chrome, tabs } = createChromeMock();
-    tabs[0].url = 'https://example.com/';
-    tabs[0].title = 'Example Domain';
-    tabs[0].status = 'complete';
+    tabs[1].url = 'https://example.com/';
+    tabs[1].title = 'Example Domain';
+    tabs[1].status = 'complete';
     vi.stubGlobal('chrome', chrome);
 
     const mod = await import('./background');
     mod.__test__.setAutomationWindowId('site:probe', null);
 
     const result = await mod.__test__.handleExec({
-      id: 'recover-session',
+      id: 'foreign-tab',
       action: 'exec',
       workspace: 'site:probe',
-      tabId: 1,
+      tabId: 2,
+      code: 'window.location.href',
+    }, 'site:probe');
+
+    expect(result.ok).toBe(true);
+    expect(mod.__test__.getAutomationWindowId('site:probe')).toBe(null);
+  });
+
+  it('keeps the workspace session on its own automation window when a foreign tab id is used', async () => {
+    const { chrome, tabs } = createChromeMock();
+    tabs[1].url = 'https://example.com/';
+    tabs[1].title = 'Example Domain';
+    tabs[1].status = 'complete';
+    vi.stubGlobal('chrome', chrome);
+
+    const mod = await import('./background');
+    mod.__test__.setAutomationWindowId('site:probe', 1);
+
+    const result = await mod.__test__.handleExec({
+      id: 'keep-session',
+      action: 'exec',
+      workspace: 'site:probe',
+      tabId: 2,
       code: 'window.location.href',
     }, 'site:probe');
 
@@ -161,26 +215,21 @@ describe('background tab isolation', () => {
     expect(mod.__test__.getAutomationWindowId('site:probe')).toBe(1);
   });
 
-  it('rebinds the workspace session to an explicit debuggable tab even if the stored window differs', async () => {
-    const { chrome, tabs } = createChromeMock();
-    tabs[0].url = 'https://example.com/';
-    tabs[0].title = 'Example Domain';
-    tabs[0].status = 'complete';
+  it('refuses to close an explicit tab outside the automation window', async () => {
+    const { chrome } = createChromeMock();
     vi.stubGlobal('chrome', chrome);
 
     const mod = await import('./background');
-    mod.__test__.setAutomationWindowId('site:probe', 99);
+    mod.__test__.setAutomationWindowId('site:probe', 1);
 
-    const result = await mod.__test__.handleExec({
-      id: 'rebind-session',
-      action: 'exec',
+    await expect(mod.__test__.handleTabs({
+      id: 'close-foreign',
+      action: 'tabs',
+      op: 'close',
       workspace: 'site:probe',
-      tabId: 1,
-      code: 'window.location.href',
-    }, 'site:probe');
-
-    expect(result.ok).toBe(true);
-    expect(mod.__test__.getAutomationWindowId('site:probe')).toBe(1);
+      tabId: 2,
+    }, 'site:probe')).rejects.toThrow('Tab 2 is not in the automation window');
+    expect(chrome.tabs.remove).not.toHaveBeenCalled();
   });
 
   it('treats normalized same-url navigate as already complete', async () => {
@@ -217,6 +266,12 @@ describe('background tab isolation', () => {
     tabs[0].url = 'data:text/html,<html></html>';
     tabs[0].title = 'blank';
     tabs[0].status = 'complete';
+    chrome.tabs.update = vi.fn(async (tabId: number, updates: { active?: boolean; url?: string }) => {
+      const tab = tabs.find((entry) => entry.id === tabId);
+      if (!tab) throw new Error(`Unknown tab ${tabId}`);
+      if (updates.active !== undefined) tab.active = updates.active;
+      return tab;
+    }) as typeof chrome.tabs.update;
     vi.stubGlobal('chrome', chrome);
 
     const mod = await import('./background');
