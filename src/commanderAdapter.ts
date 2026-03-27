@@ -30,6 +30,7 @@ import {
   CommandExecutionError,
 } from './errors.js';
 import { checkDaemonStatus } from './browser/discover.js';
+import { addBrowserEnvOverrideOptions, runWithBrowserEnvOptions } from './browserEnvOptions.js';
 
 export function normalizeArgValue(argType: string | undefined, value: unknown, name: string): unknown {
   if (argType !== 'bool') return value;
@@ -69,6 +70,9 @@ export function registerCommandToProgram(siteCmd: Command, cmd: CliCommand): voi
   subCmd
     .option('-f, --format <fmt>', 'Output format: table, json, yaml, md, csv', 'table')
     .option('-v, --verbose', 'Debug output', false);
+  if (cmd.browser) {
+    addBrowserEnvOverrideOptions(subCmd, { allowBrowserCdp: cmd.supportsBrowserCdp !== false });
+  }
 
   subCmd.addHelpText('after', formatRegistryHelpText(cmd));
 
@@ -100,8 +104,13 @@ export function registerCommandToProgram(siteCmd: Command, cmd: CliCommand): voi
         const replacement = cmd.replacedBy ? ` Use ${cmd.replacedBy} instead.` : '';
         console.error(chalk.yellow(`Deprecated: ${message}${replacement}`));
       }
-
-      const result = await executeCommand(cmd, kwargs, verbose);
+      const result = cmd.browser
+        ? await runWithBrowserEnvOptions(
+            optionsRecord,
+            () => executeCommand(cmd, kwargs, verbose),
+            { allowBrowserCdp: cmd.supportsBrowserCdp !== false },
+          )
+        : await executeCommand(cmd, kwargs, verbose);
 
       if (verbose && (!result || (Array.isArray(result) && result.length === 0))) {
         console.error(chalk.yellow('[Verbose] Warning: Command returned an empty result.'));
