@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { discoverClis, discoverPlugins, PLUGINS_DIR } from './discovery.js';
+import { discoverClis, discoverPlugins, ensureUserCliCompatShims, PLUGINS_DIR } from './discovery.js';
 import { executeCommand } from './execution.js';
 import { getRegistry, cli, Strategy } from './registry.js';
 import { clearAllHooks, onAfterExecute } from './hooks.js';
@@ -79,6 +79,39 @@ cli({
     }
   });
 
+  it('loads legacy user TS CLI modules via compatibility shims', async () => {
+    const tempOpencliRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'opencli-user-clis-'));
+    const userClisDir = path.join(tempOpencliRoot, 'clis');
+    const siteDir = path.join(userClisDir, 'legacy-site');
+    const commandPath = path.join(siteDir, 'hello.ts');
+
+    try {
+      await ensureUserCliCompatShims(tempOpencliRoot);
+      await fs.promises.mkdir(siteDir, { recursive: true });
+      await fs.promises.writeFile(commandPath, `
+import { cli, Strategy } from '../../registry';
+import { CommandExecutionError } from '../../errors';
+
+cli({
+  site: 'legacy-site',
+  name: 'hello',
+  description: 'hello command',
+  strategy: Strategy.PUBLIC,
+  browser: false,
+  func: async () => [{ ok: true, errorName: new CommandExecutionError('boom').name }],
+});
+`);
+
+      await discoverClis(userClisDir);
+
+      const cmd = getRegistry().get('legacy-site/hello');
+      expect(cmd).toBeDefined();
+      await expect(executeCommand(cmd!, {})).resolves.toEqual([{ ok: true, errorName: 'CommandExecutionError' }]);
+    } finally {
+      await fs.promises.rm(tempOpencliRoot, { recursive: true, force: true });
+    }
+  });
+
   it('preserves supportsBrowserCdp when loading commands from the manifest', async () => {
     const tempBuildRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'opencli-manifest-flags-'));
     const distDir = path.join(tempBuildRoot, 'dist');
@@ -113,9 +146,15 @@ cli({
 describe('discoverPlugins', () => {
   const testPluginDir = path.join(PLUGINS_DIR, '__test-plugin__');
   const yamlPath = path.join(testPluginDir, 'greeting.yaml');
+  const symlinkTargetDir = path.join(os.tmpdir(), '__test-plugin-symlink-target__');
+  const symlinkPluginDir = path.join(PLUGINS_DIR, '__test-plugin-symlink__');
+  const brokenSymlinkDir = path.join(PLUGINS_DIR, '__test-plugin-broken__');
 
   afterEach(async () => {
     try { await fs.promises.rm(testPluginDir, { recursive: true }); } catch {}
+    try { await fs.promises.rm(symlinkPluginDir, { recursive: true, force: true }); } catch {}
+    try { await fs.promises.rm(symlinkTargetDir, { recursive: true, force: true }); } catch {}
+    try { await fs.promises.rm(brokenSymlinkDir, { recursive: true, force: true }); } catch {}
   });
 
   it('discovers YAML plugins from ~/.opencli/plugins/', async () => {
@@ -147,6 +186,38 @@ columns: [message]
   it('handles non-existent plugins directory gracefully', async () => {
     // discoverPlugins should not throw if ~/.opencli/plugins/ does not exist
     await expect(discoverPlugins()).resolves.not.toThrow();
+  });
+
+  it('discovers YAML plugins from symlinked plugin directories', async () => {
+    await fs.promises.mkdir(PLUGINS_DIR, { recursive: true });
+    await fs.promises.mkdir(symlinkTargetDir, { recursive: true });
+    await fs.promises.writeFile(path.join(symlinkTargetDir, 'hello.yaml'), `
+site: __test-plugin-symlink__
+name: hello
+description: Test plugin greeting via symlink
+strategy: public
+browser: false
+
+pipeline:
+  - evaluate: "() => [{ message: 'hello from symlink plugin' }]"
+
+columns: [message]
+`);
+    await fs.promises.symlink(symlinkTargetDir, symlinkPluginDir, 'dir');
+
+    await discoverPlugins();
+
+    const cmd = getRegistry().get('__test-plugin-symlink__/hello');
+    expect(cmd).toBeDefined();
+    expect(cmd!.description).toBe('Test plugin greeting via symlink');
+  });
+
+  it('skips broken plugin symlinks without throwing', async () => {
+    await fs.promises.mkdir(PLUGINS_DIR, { recursive: true });
+    await fs.promises.symlink(path.join(os.tmpdir(), '__missing-plugin-target__'), brokenSymlinkDir, 'dir');
+
+    await expect(discoverPlugins()).resolves.not.toThrow();
+    expect(getRegistry().get('__test-plugin-broken__/hello')).toBeUndefined();
   });
 });
 

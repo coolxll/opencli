@@ -5,7 +5,7 @@
  * Everything else is just JS code sent via 'exec'.
  */
 
-export type Action = 'exec' | 'navigate' | 'tabs' | 'cookies' | 'screenshot' | 'close-window' | 'sessions';
+export type Action = 'exec' | 'navigate' | 'tabs' | 'cookies' | 'screenshot' | 'close-window' | 'sessions' | 'set-file-input' | 'bind-current';
 
 export interface Command {
   /** Unique request ID */
@@ -26,12 +26,20 @@ export interface Command {
   index?: number;
   /** Cookie domain filter */
   domain?: string;
+  /** Optional hostname/domain to require for current-tab binding */
+  matchDomain?: string;
+  /** Optional pathname prefix to require for current-tab binding */
+  matchPathPrefix?: string;
   /** Screenshot format: png (default) or jpeg */
   format?: 'png' | 'jpeg';
   /** JPEG quality (0-100), only for jpeg format */
   quality?: number;
   /** Whether to capture full page (not just viewport) */
   fullPage?: boolean;
+  /** Local file paths for set-file-input action */
+  files?: string[];
+  /** CSS selector for file input element (set-file-input action) */
+  selector?: string;
 }
 
 export interface Result {
@@ -49,7 +57,8 @@ export interface Result {
 export const DAEMON_PORT = 19825;
 export const DAEMON_HOST = 'localhost';
 export const DAEMON_WS_URL = `ws://${DAEMON_HOST}:${DAEMON_PORT}/ext`;
-export const DAEMON_HTTP_URL = `http://${DAEMON_HOST}:${DAEMON_PORT}`;
+/** Lightweight health-check endpoint — probed before each WebSocket attempt. */
+export const DAEMON_PING_URL = `http://${DAEMON_HOST}:${DAEMON_PORT}/ping`;
 
 /** Base reconnect delay for extension WebSocket (ms) */
 export const WS_RECONNECT_BASE_DELAY = 2000;

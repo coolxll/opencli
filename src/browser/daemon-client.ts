@@ -6,6 +6,7 @@
 
 import { DEFAULT_DAEMON_PORT } from '../constants.js';
 import type { BrowserSessionInfo } from '../types.js';
+import { sleep } from '../utils.js';
 
 const DAEMON_PORT = parseInt(process.env.OPENCLI_DAEMON_PORT ?? String(DEFAULT_DAEMON_PORT), 10);
 const DAEMON_URL = `http://127.0.0.1:${DAEMON_PORT}`;
@@ -18,7 +19,7 @@ function generateId(): string {
 
 export interface DaemonCommand {
   id: string;
-  action: 'exec' | 'navigate' | 'tabs' | 'cookies' | 'screenshot' | 'close-window' | 'sessions';
+  action: 'exec' | 'navigate' | 'tabs' | 'cookies' | 'screenshot' | 'close-window' | 'sessions' | 'set-file-input' | 'bind-current';
   tabId?: number;
   code?: string;
   workspace?: string;
@@ -26,9 +27,15 @@ export interface DaemonCommand {
   op?: string;
   index?: number;
   domain?: string;
+  matchDomain?: string;
+  matchPathPrefix?: string;
   format?: 'png' | 'jpeg';
   quality?: number;
   fullPage?: boolean;
+  /** Local file paths for set-file-input action */
+  files?: string[];
+  /** CSS selector for file input element (set-file-input action) */
+  selector?: string;
 }
 
 export interface DaemonResult {
@@ -114,7 +121,7 @@ export async function sendCommand(
           || errMsg.includes('no longer exists');
         if (isTransient && attempt < maxRetries) {
           // Longer delay for extension recovery (service worker restart)
-          await new Promise(r => setTimeout(r, 1500));
+          await sleep(1500);
           continue;
         }
         throw new Error(result.error ?? 'Daemon command failed');
@@ -125,7 +132,7 @@ export async function sendCommand(
       const isRetryable = err instanceof TypeError  // fetch network error
         || (err instanceof Error && err.name === 'AbortError');
       if (isRetryable && attempt < maxRetries) {
-        await new Promise(r => setTimeout(r, 500));
+        await sleep(500);
         continue;
       }
       throw err;
@@ -138,5 +145,9 @@ export async function sendCommand(
 export async function listSessions(): Promise<BrowserSessionInfo[]> {
   const result = await sendCommand('sessions');
   return Array.isArray(result) ? result : [];
+}
+
+export async function bindCurrentTab(workspace: string, opts: { matchDomain?: string; matchPathPrefix?: string } = {}): Promise<unknown> {
+  return sendCommand('bind-current', { workspace, ...opts });
 }
 

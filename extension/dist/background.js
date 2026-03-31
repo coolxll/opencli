@@ -3,7 +3,8 @@
 var DAEMON_PORT = 19825;
 var DAEMON_HOST = "localhost";
 var DAEMON_WS_URL = `ws://${DAEMON_HOST}:${DAEMON_PORT}/ext`;
-`${DAEMON_HOST}${DAEMON_PORT}`;
+/** Lightweight health-check endpoint — probed before each WebSocket attempt. */
+var DAEMON_PING_URL = `http://${DAEMON_HOST}:${DAEMON_PORT}/ping`;
 /** Base reconnect delay for extension WebSocket (ms) */
 var WS_RECONNECT_BASE_DELAY = 2e3;
 /** Max reconnect delay (ms) */
@@ -106,6 +107,30 @@ async function screenshot(tabId, options = {}) {
 		if (options.fullPage) await chrome.debugger.sendCommand({ tabId }, "Emulation.clearDeviceMetricsOverride").catch(() => {});
 	}
 }
+/**
+* Set local file paths on a file input element via CDP DOM.setFileInputFiles.
+* This bypasses the need to send large base64 payloads through the message channel —
+* Chrome reads the files directly from the local filesystem.
+*
+* @param tabId - Target tab ID
+* @param files - Array of absolute local file paths
+* @param selector - CSS selector to find the file input (optional, defaults to first file input)
+*/
+async function setFileInputFiles(tabId, files, selector) {
+	await ensureAttached(tabId);
+	await chrome.debugger.sendCommand({ tabId }, "DOM.enable");
+	const doc = await chrome.debugger.sendCommand({ tabId }, "DOM.getDocument");
+	const query = selector || "input[type=\"file\"]";
+	const result = await chrome.debugger.sendCommand({ tabId }, "DOM.querySelector", {
+		nodeId: doc.root.nodeId,
+		selector: query
+	});
+	if (!result.nodeId) throw new Error(`No element found matching selector: ${query}`);
+	await chrome.debugger.sendCommand({ tabId }, "DOM.setFileInputFiles", {
+		files,
+		nodeId: result.nodeId
+	});
+}
 async function detach(tabId) {
 	if (!attached.has(tabId)) return;
 	attached.delete(tabId);
@@ -156,8 +181,20 @@ console.error = (...args) => {
 	_origError(...args);
 	forwardLog("error", args);
 };
-function connect() {
+/**
+* Probe the daemon via its /ping HTTP endpoint before attempting a WebSocket
+* connection.  fetch() failures are silently catchable; new WebSocket() is not
+* — Chrome logs ERR_CONNECTION_REFUSED to the extension error page before any
+* JS handler can intercept it.  By keeping the probe inside connect() every
+* call site remains unchanged and the guard can never be accidentally skipped.
+*/
+async function connect() {
 	if (ws?.readyState === WebSocket.OPEN || ws?.readyState === WebSocket.CONNECTING) return;
+	try {
+		if (!(await fetch(DAEMON_PING_URL, { signal: AbortSignal.timeout(1e3) })).ok) return;
+	} catch {
+		return;
+	}
 	try {
 		ws = new WebSocket(DAEMON_WS_URL);
 	} catch {
@@ -224,6 +261,11 @@ function resetWindowIdleTimer(workspace) {
 	session.idleTimer = setTimeout(async () => {
 		const current = automationSessions.get(workspace);
 		if (!current) return;
+		if (!current.owned) {
+			console.log(`[opencli] Borrowed workspace ${workspace} detached from window ${current.windowId} (idle timeout)`);
+			automationSessions.delete(workspace);
+			return;
+		}
 		try {
 			await chrome.windows.remove(current.windowId);
 			console.log(`[opencli] Automation window ${current.windowId} (${workspace}) closed (idle timeout)`);
@@ -243,7 +285,9 @@ async function getAutomationWindow(workspace) {
 	const session = {
 		windowId: (await createAutomationWindowQuietly()).id,
 		idleTimer: null,
-		idleDeadlineAt: Date.now() + WINDOW_IDLE_TIMEOUT
+		idleDeadlineAt: Date.now() + WINDOW_IDLE_TIMEOUT,
+		owned: true,
+		preferredTabId: null
 	};
 	automationSessions.set(workspace, session);
 	console.log(`[opencli] Created automation window ${session.windowId} (${workspace})`);
@@ -313,6 +357,8 @@ async function handleCommand(cmd) {
 			case "screenshot": return await handleScreenshot(cmd, workspace);
 			case "close-window": return await handleCloseWindow(cmd, workspace);
 			case "sessions": return await handleSessions(cmd);
+			case "set-file-input": return await handleSetFileInput(cmd, workspace);
+			case "bind-current": return await handleBindCurrent(cmd, workspace);
 			default: return {
 				id: cmd.id,
 				ok: false,
@@ -360,6 +406,79 @@ function getAutomationSessionForWindow(windowId) {
 	};
 	return null;
 }
+function matchesDomain(url, domain) {
+	if (!url) return false;
+	try {
+		const parsed = new URL(url);
+		return parsed.hostname === domain || parsed.hostname.endsWith(`.${domain}`);
+	} catch {
+		return false;
+	}
+}
+function matchesBindCriteria(tab, cmd) {
+	if (!tab.id || !isDebuggableUrl(tab.url)) return false;
+	if (cmd.matchDomain && !matchesDomain(tab.url, cmd.matchDomain)) return false;
+	if (cmd.matchPathPrefix) try {
+		if (!new URL(tab.url).pathname.startsWith(cmd.matchPathPrefix)) return false;
+	} catch {
+		return false;
+	}
+	return true;
+}
+function isNotebooklmWorkspace(workspace) {
+	return workspace === "site:notebooklm";
+}
+function classifyNotebooklmUrl(url) {
+	if (!url) return "other";
+	try {
+		const parsed = new URL(url);
+		if (parsed.hostname !== "notebooklm.google.com") return "other";
+		return parsed.pathname.startsWith("/notebook/") ? "notebook" : "home";
+	} catch {
+		return "other";
+	}
+}
+function scoreWorkspaceTab(workspace, tab) {
+	if (!tab.id || !isDebuggableUrl(tab.url)) return -1;
+	if (isNotebooklmWorkspace(workspace)) {
+		const kind = classifyNotebooklmUrl(tab.url);
+		if (kind === "other") return -1;
+		if (kind === "notebook") return tab.active ? 400 : 300;
+		return tab.active ? 200 : 100;
+	}
+	return -1;
+}
+function setWorkspaceSession(workspace, session) {
+	const existing = automationSessions.get(workspace);
+	if (existing?.idleTimer) clearTimeout(existing.idleTimer);
+	automationSessions.set(workspace, {
+		...session,
+		idleTimer: null,
+		idleDeadlineAt: Date.now() + WINDOW_IDLE_TIMEOUT
+	});
+}
+async function maybeBindWorkspaceToExistingTab(workspace) {
+	if (!isNotebooklmWorkspace(workspace)) return null;
+	const tabs = await chrome.tabs.query({});
+	let bestTab = null;
+	let bestScore = -1;
+	for (const tab of tabs) {
+		const score = scoreWorkspaceTab(workspace, tab);
+		if (score > bestScore) {
+			bestScore = score;
+			bestTab = tab;
+		}
+	}
+	if (!bestTab?.id || bestScore < 0) return null;
+	setWorkspaceSession(workspace, {
+		windowId: bestTab.windowId,
+		owned: false,
+		preferredTabId: bestTab.id
+	});
+	console.log(`[opencli] Workspace ${workspace} bound to existing tab ${bestTab.id} in window ${bestTab.windowId}`);
+	resetWindowIdleTimer(workspace);
+	return bestTab.id;
+}
 /**
 * Resolve target tab in the automation window.
 * If explicit tabId is given, use that directly.
@@ -368,18 +487,32 @@ function getAutomationSessionForWindow(windowId) {
 async function resolveTabId(tabId, workspace) {
 	if (tabId !== void 0) try {
 		const tab = await chrome.tabs.get(tabId);
-		if (isDebuggableUrl(tab.url)) {
-			const tracked = getAutomationSessionForWindow(tab.windowId);
-			if (tracked?.workspace === workspace) {
-				resetWindowIdleTimer(workspace);
-				console.log(`[opencli] Reused automation tab ${tabId} in window ${tab.windowId} (${workspace})`);
-			} else if (tracked) console.log(`[opencli] Using tab ${tabId} from automation window ${tab.windowId} owned by ${tracked.workspace}`);
-			else console.log(`[opencli] Using explicit tab ${tabId} in non-automation window ${tab.windowId} without binding workspace ${workspace}`);
+		const session = automationSessions.get(workspace);
+		const matchesSession = session ? session.preferredTabId !== null ? session.preferredTabId === tabId : tab.windowId === session.windowId : false;
+		if (isDebuggableUrl(tab.url) && matchesSession) {
+			resetWindowIdleTimer(workspace);
 			return tabId;
 		}
-		console.warn(`[opencli] Tab ${tabId} URL is not debuggable (${tab.url}), re-resolving`);
+		const tracked = getAutomationSessionForWindow(tab.windowId);
+		if (isDebuggableUrl(tab.url) && tracked?.workspace === workspace) {
+			resetWindowIdleTimer(workspace);
+			console.log(`[opencli] Reused automation tab ${tabId} in window ${tab.windowId} (${workspace})`);
+			return tabId;
+		}
+		if (isDebuggableUrl(tab.url) && tracked) console.log(`[opencli] Using tab ${tabId} from automation window ${tab.windowId} owned by ${tracked.workspace}`);
+		if (session && !matchesSession) console.warn(`[opencli] Tab ${tabId} is not bound to workspace ${workspace}, re-resolving`);
+		else if (!isDebuggableUrl(tab.url)) console.warn(`[opencli] Tab ${tabId} URL is not debuggable (${tab.url}), re-resolving`);
 	} catch {
 		console.warn(`[opencli] Tab ${tabId} no longer exists, re-resolving`);
+	}
+	const adoptedTabId = await maybeBindWorkspaceToExistingTab(workspace);
+	if (adoptedTabId !== null) return adoptedTabId;
+	const existingSession = automationSessions.get(workspace);
+	if (existingSession?.preferredTabId !== null) try {
+		const preferredTab = await chrome.tabs.get(existingSession.preferredTabId);
+		if (isDebuggableUrl(preferredTab.url)) return preferredTab.id;
+	} catch {
+		automationSessions.delete(workspace);
 	}
 	const windowId = await getAutomationWindow(workspace);
 	const tabs = await chrome.tabs.query({ windowId });
@@ -403,23 +536,15 @@ async function resolveTabId(tabId, workspace) {
 	if (!newTab.id) throw new Error("Failed to create tab in automation window");
 	return newTab.id;
 }
-async function resolveAutomationTabId(tabId, workspace) {
-	if (tabId === void 0) return resolveTabId(void 0, workspace);
-	let tab;
-	try {
-		tab = await chrome.tabs.get(tabId);
-	} catch {
-		throw new Error(`Tab ${tabId} no longer exists`);
-	}
-	const session = automationSessions.get(workspace);
-	if (!session || tab.windowId !== session.windowId) throw new Error(`Tab ${tabId} is not in the automation window`);
-	if (!isDebuggableUrl(tab.url)) throw new Error(`Tab ${tabId} URL is not debuggable (${tab.url ?? "unknown"})`);
-	resetWindowIdleTimer(workspace);
-	return tabId;
-}
 async function listAutomationTabs(workspace) {
 	const session = automationSessions.get(workspace);
 	if (!session) return [];
+	if (session.preferredTabId !== null) try {
+		return [await chrome.tabs.get(session.preferredTabId)];
+	} catch {
+		automationSessions.delete(workspace);
+		return [];
+	}
 	try {
 		return await chrome.tabs.query({ windowId: session.windowId });
 	} catch {
@@ -582,7 +707,7 @@ async function handleTabs(cmd, workspace) {
 					data: { closed: target.id }
 				};
 			}
-			const tabId = await resolveAutomationTabId(cmd.tabId, workspace);
+			const tabId = await resolveTabId(cmd.tabId, workspace);
 			await chrome.tabs.remove(tabId);
 			await detach(tabId);
 			return {
@@ -689,7 +814,7 @@ async function handleScreenshot(cmd, workspace) {
 async function handleCloseWindow(cmd, workspace) {
 	const session = automationSessions.get(workspace);
 	if (session) {
-		try {
+		if (session.owned) try {
 			await chrome.windows.remove(session.windowId);
 		} catch {}
 		if (session.idleTimer) clearTimeout(session.idleTimer);
@@ -700,6 +825,28 @@ async function handleCloseWindow(cmd, workspace) {
 		ok: true,
 		data: { closed: true }
 	};
+}
+async function handleSetFileInput(cmd, workspace) {
+	if (!cmd.files || !Array.isArray(cmd.files) || cmd.files.length === 0) return {
+		id: cmd.id,
+		ok: false,
+		error: "Missing or empty files array"
+	};
+	const tabId = await resolveTabId(cmd.tabId, workspace);
+	try {
+		await setFileInputFiles(tabId, cmd.files, cmd.selector);
+		return {
+			id: cmd.id,
+			ok: true,
+			data: { count: cmd.files.length }
+		};
+	} catch (err) {
+		return {
+			id: cmd.id,
+			ok: false,
+			error: err instanceof Error ? err.message : String(err)
+		};
+	}
 }
 async function handleSessions(cmd) {
 	const now = Date.now();
@@ -713,6 +860,38 @@ async function handleSessions(cmd) {
 		id: cmd.id,
 		ok: true,
 		data
+	};
+}
+async function handleBindCurrent(cmd, workspace) {
+	const activeTabs = await chrome.tabs.query({
+		active: true,
+		lastFocusedWindow: true
+	});
+	const fallbackTabs = await chrome.tabs.query({ lastFocusedWindow: true });
+	const allTabs = await chrome.tabs.query({});
+	const boundTab = activeTabs.find((tab) => matchesBindCriteria(tab, cmd)) ?? fallbackTabs.find((tab) => matchesBindCriteria(tab, cmd)) ?? allTabs.find((tab) => matchesBindCriteria(tab, cmd));
+	if (!boundTab?.id) return {
+		id: cmd.id,
+		ok: false,
+		error: cmd.matchDomain || cmd.matchPathPrefix ? `No visible tab matching ${cmd.matchDomain ?? "domain"}${cmd.matchPathPrefix ? ` ${cmd.matchPathPrefix}` : ""}` : "No active debuggable tab found"
+	};
+	setWorkspaceSession(workspace, {
+		windowId: boundTab.windowId,
+		owned: false,
+		preferredTabId: boundTab.id
+	});
+	resetWindowIdleTimer(workspace);
+	console.log(`[opencli] Workspace ${workspace} explicitly bound to tab ${boundTab.id} (${boundTab.url})`);
+	return {
+		id: cmd.id,
+		ok: true,
+		data: {
+			tabId: boundTab.id,
+			windowId: boundTab.windowId,
+			url: boundTab.url,
+			title: boundTab.title,
+			workspace
+		}
 	};
 }
 //#endregion

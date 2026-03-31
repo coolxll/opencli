@@ -18,6 +18,7 @@ import { render as renderOutput } from './output.js';
 import { executeCommand } from './execution.js';
 import {
   CliError,
+  EXIT_CODES,
   ERROR_ICONS,
   getErrorMessage,
   BrowserConnectError,
@@ -33,7 +34,7 @@ import { checkDaemonStatus } from './browser/discover.js';
 import { addBrowserEnvOverrideOptions, runWithBrowserEnvOptions } from './browserEnvOptions.js';
 
 export function normalizeArgValue(argType: string | undefined, value: unknown, name: string): unknown {
-  if (argType !== 'bool') return value;
+  if (argType !== 'bool' && argType !== 'boolean') return value;
   if (typeof value === 'boolean') return value;
   if (value == null || value === '') return false;
 
@@ -41,7 +42,7 @@ export function normalizeArgValue(argType: string | undefined, value: unknown, n
   if (normalized === 'true') return true;
   if (normalized === 'false') return false;
 
-  throw new CliError('ARGUMENT', `"${name}" must be either "true" or "false".`);
+  throw new ArgumentError(`"${name}" must be either "true" or "false".`);
 }
 
 /**
@@ -52,6 +53,7 @@ export function registerCommandToProgram(siteCmd: Command, cmd: CliCommand): voi
 
   const deprecatedSuffix = cmd.deprecated ? ' [deprecated]' : '';
   const subCmd = siteCmd.command(cmd.name).description(`${cmd.description}${deprecatedSuffix}`);
+  if (cmd.aliases?.length) subCmd.aliases(cmd.aliases);
 
   // Register positional args first, then named options
   const positionalArgs: typeof cmd.args = [];
@@ -111,6 +113,9 @@ export function registerCommandToProgram(siteCmd: Command, cmd: CliCommand): voi
             { allowBrowserCdp: cmd.supportsBrowserCdp !== false },
           )
         : await executeCommand(cmd, kwargs, verbose);
+      if (result === null || result === undefined) {
+        return;
+      }
 
       if (verbose && (!result || (Array.isArray(result) && result.length === 0))) {
         console.error(chalk.yellow('[Verbose] Warning: Command returned an empty result.'));
@@ -126,9 +131,31 @@ export function registerCommandToProgram(siteCmd: Command, cmd: CliCommand): voi
       });
     } catch (err) {
       await renderError(err, fullName(cmd), optionsRecord.verbose === true);
-      process.exitCode = 1;
+      process.exitCode = resolveExitCode(err);
     }
   });
+}
+
+// ── Exit code resolution ─────────────────────────────────────────────────────
+
+/**
+ * Map any thrown value to a Unix process exit code.
+ *
+ * - CliError subclasses carry their own exitCode (set in errors.ts).
+ * - Generic Error objects are classified by message pattern so that
+ *   un-typed auth / not-found errors from adapters still produce
+ *   meaningful exit codes for shell scripts.
+ */
+function resolveExitCode(err: unknown): number {
+  if (err instanceof CliError) return err.exitCode;
+
+  // Pattern-based fallback for untyped errors thrown by third-party adapters.
+  const msg = getErrorMessage(err);
+  const kind = classifyGenericError(msg);
+  if (kind === 'auth')      return EXIT_CODES.NOPERM;
+  if (kind === 'not-found') return EXIT_CODES.EMPTY_RESULT;
+  if (kind === 'http')      return EXIT_CODES.GENERIC_ERROR;  // HTTP 4xx/5xx → generic; renderer shows details
+  return EXIT_CODES.GENERIC_ERROR;
 }
 
 // ── Error rendering ──────────────────────────────────────────────────────────
@@ -279,7 +306,10 @@ export function registerAllCommands(
   program: Command,
   siteGroups: Map<string, Command>,
 ): void {
+  const seen = new Set<CliCommand>();
   for (const [, cmd] of getRegistry()) {
+    if (seen.has(cmd)) continue;
+    seen.add(cmd);
     let siteCmd = siteGroups.get(cmd.site);
     if (!siteCmd) {
       siteCmd = program.command(cmd.site).description(`${cmd.site} commands`);

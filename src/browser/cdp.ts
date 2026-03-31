@@ -28,6 +28,8 @@ import {
   autoScrollJs,
   networkRequestsJs,
   waitForDomStableJs,
+  waitForCaptureJs,
+  waitForSelectorJs,
 } from './dom-helpers.js';
 
 export interface CDPTarget {
@@ -274,6 +276,7 @@ export class CDPBridge implements IBrowserFactory {
 
 class CDPPage implements IPage {
   private _pageEnabled = false;
+  private _lastUrl: string | null = null;
   constructor(private bridge: CDPBridge) {}
 
   /** Navigate with proper load event waiting (P1 fix #3) */
@@ -283,8 +286,6 @@ class CDPPage implements IPage {
       this._pageEnabled = true;
     }
     const loadPromise = this.bridge.waitForEvent('Page.loadEventFired', 30_000);
-    // Guard the event wait immediately so a navigation transport failure does not
-    // leave a late unhandled rejection behind.
     void loadPromise.catch(() => {});
     const navigateResult = await this.bridge.send('Page.navigate', { url });
     const navigationError = isRecord(navigateResult) && typeof navigateResult.errorText === 'string'
@@ -297,10 +298,8 @@ class CDPPage implements IPage {
       await loadPromise;
     } catch (error) {
       logVerbose(`[cdp] Timed out waiting for Page.loadEventFired after navigating to ${url}`, normalizeError(error));
-      // Do not fail on load timeout alone; SPAs and long-polling pages may never emit a clean load event.
     }
-    // Smart settle: use DOM stability detection instead of fixed sleep.
-    // settleMs is now a timeout cap (default 1000ms), not a fixed wait.
+    this._lastUrl = url;
     if (options?.waitUntil !== 'none') {
       const maxMs = options?.settleMs ?? 1000;
       await this.evaluate(waitForDomStableJs(maxMs, Math.min(500, maxMs)));
@@ -365,12 +364,26 @@ class CDPPage implements IPage {
 
   async wait(options: number | WaitOptions): Promise<void> {
     if (typeof options === 'number') {
-      await new Promise(resolve => setTimeout(resolve, options * 1000));
+      if (options >= 1) {
+        try {
+          const maxMs = options * 1000;
+          await this.evaluate(waitForDomStableJs(maxMs, Math.min(500, maxMs)));
+          return;
+        } catch {
+          // Fallback: fixed sleep
+        }
+      }
+      await new Promise((resolve) => setTimeout(resolve, options * 1000));
       return;
     }
     if (typeof options.time === 'number') {
       const waitTime = options.time;
       await new Promise(resolve => setTimeout(resolve, waitTime * 1000));
+      return;
+    }
+    if (options.selector) {
+      const timeout = (options.timeout ?? 10) * 1000;
+      await this.evaluate(waitForSelectorJs(options.selector, timeout));
       return;
     }
     if (options.text) {
@@ -429,6 +442,20 @@ class CDPPage implements IPage {
     return [];
   }
 
+  async getCurrentUrl(): Promise<string | null> {
+    if (this._lastUrl) return this._lastUrl;
+    try {
+      const current = await this.evaluate('window.location.href');
+      if (typeof current === 'string' && current) {
+        this._lastUrl = current;
+        return current;
+      }
+    } catch {
+      // Best-effort: direct CDP sessions may not have a ready page yet.
+    }
+    return null;
+  }
+
   async installInterceptor(pattern: string): Promise<void> {
     const { generateInterceptorJs } = await import('../interceptor.js');
     await this.evaluate(generateInterceptorJs(JSON.stringify(pattern), {
@@ -441,6 +468,11 @@ class CDPPage implements IPage {
     const { generateReadInterceptedJs } = await import('../interceptor.js');
     const result = await this.evaluate(generateReadInterceptedJs('__opencli_xhr'));
     return Array.isArray(result) ? result : [];
+  }
+
+  async waitForCapture(timeout: number = 10): Promise<void> {
+    const maxMs = timeout * 1000;
+    await this.evaluate(waitForCaptureJs(maxMs));
   }
 }
 
