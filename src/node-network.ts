@@ -188,6 +188,8 @@ export function decideProxy(url: URL, env: NodeJS.ProcessEnv = process.env): Pro
 export function getDispatcherForUrl(url: URL, env: NodeJS.ProcessEnv = process.env): Dispatcher {
   const config = resolveProxyConfig(env);
   if (!config.httpProxy && !config.httpsProxy) return directDispatcher;
+  const decision = decideProxy(url, env);
+  if (decision.mode === 'direct') return directDispatcher;
   return createProxyDispatcher(config);
 }
 
