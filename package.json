@@ -25,6 +25,7 @@
     "clean-dist": "node scripts/clean-dist.cjs",
     "clean-yaml": "node scripts/clean-yaml.cjs",
     "copy-yaml": "node scripts/copy-yaml.cjs",
+    "manual:commands": "node scripts/generate-command-manual.cjs",
     "start": "node dist/main.js",
     "start:bun": "bun dist/main.js",
     "postinstall": "node scripts/postinstall.js || true",

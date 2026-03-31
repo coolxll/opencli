@@ -470,7 +470,51 @@ cli({
   strategy: Strategy.COOKIE,
   browser: true,
   columns: ['title', 'replies', 'created', 'likes', 'views', 'url'],
-  args: LINUX_DO_FEED_ARGS,
+  // Keep args inline so the build-time manifest compiler can preserve them.
+  args: [
+    {
+      name: 'view',
+      type: 'str',
+      default: 'latest',
+      help: 'View type',
+      choices: ['latest', 'hot', 'top'],
+    },
+    {
+      name: 'tag',
+      type: 'str',
+      help: 'Tag name, slug, or id',
+    },
+    {
+      name: 'category',
+      type: 'str',
+      help: 'Category name, slug, id, or parent/name path',
+    },
+    { name: 'limit', type: 'int', default: 20, help: 'Number of items (per_page)' },
+    {
+      name: 'order',
+      type: 'str',
+      default: 'default',
+      help: 'Sort order',
+      choices: [
+        'default',
+        'created',
+        'activity',
+        'views',
+        'posts',
+        'category',
+        'likes',
+        'op_likes',
+        'posters',
+      ],
+    },
+    { name: 'ascending', type: 'boolean', default: false, help: 'Sort ascending (default: desc)' },
+    {
+      name: 'period',
+      type: 'str',
+      help: 'Time period (only for --view top)',
+      choices: ['all', 'daily', 'weekly', 'monthly', 'quarterly', 'yearly'],
+    },
+  ],
   func: executeLinuxDoFeed,
 });
 
