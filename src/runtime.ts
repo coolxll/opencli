@@ -1,6 +1,7 @@
 import { BrowserBridge, CDPBridge } from './browser/index.js';
 import type { IPage } from './types.js';
 import { TimeoutError } from './errors.js';
+import { isElectronApp } from './electron-apps.js';
 
 export type BrowserEnvOverrides = {
   browserCdp?: boolean;
@@ -13,11 +14,12 @@ export interface BrowserEnvOverrideConfig {
 }
 
 /**
- * Returns the appropriate browser factory based on environment config.
- * Uses CDPBridge when OPENCLI_CDP_ENDPOINT is set, otherwise BrowserBridge.
+ * Returns the appropriate browser factory based on site type.
+ * Uses CDPBridge for registered Electron apps, otherwise BrowserBridge.
  */
-export function getBrowserFactory(): new () => IBrowserFactory {
-  return process.env.OPENCLI_CDP_ENDPOINT ? CDPBridge : BrowserBridge;
+export function getBrowserFactory(site?: string): new () => IBrowserFactory {
+  if (site && isElectronApp(site)) return CDPBridge;
+  return BrowserBridge;
 }
 
 export function extractBrowserEnvOverrides(options?: Record<string, unknown> | null): BrowserEnvOverrides {
@@ -158,20 +160,24 @@ export function withTimeoutMs<T>(
 
 /** Interface for browser factory (BrowserBridge or test mocks) */
 export interface IBrowserFactory {
-  connect(opts?: { timeout?: number; workspace?: string }): Promise<IPage>;
+  connect(opts?: { timeout?: number; workspace?: string; cdpEndpoint?: string }): Promise<IPage>;
   close(): Promise<void>;
 }
 
 export async function browserSession<T>(
   BrowserFactory: new () => IBrowserFactory,
   fn: (page: IPage) => Promise<T>,
-  opts: { workspace?: string } = {},
+  opts: { workspace?: string; cdpEndpoint?: string } = {},
 ): Promise<T> {
-  const mcp = new BrowserFactory();
+  const browser = new BrowserFactory();
   try {
-    const page = await mcp.connect({ timeout: DEFAULT_BROWSER_CONNECT_TIMEOUT, workspace: opts.workspace });
+    const page = await browser.connect({
+      timeout: DEFAULT_BROWSER_CONNECT_TIMEOUT,
+      workspace: opts.workspace,
+      cdpEndpoint: opts.cdpEndpoint,
+    });
     return await fn(page);
   } finally {
-    await mcp.close().catch(() => {});
+    await browser.close().catch(() => {});
   }
 }
