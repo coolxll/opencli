@@ -19,7 +19,22 @@ import { BasePage } from './base-page.js';
 import { classifyBrowserError } from './errors.js';
 import { log } from '../logger.js';
 
+const BLANK_PAGE = 'data:text/html,<html></html>';
+
+type NavigateResult = {
+  tabId?: number;
+  url?: string;
+  timedOut?: boolean;
+};
+
 function isUnsupportedNetworkCaptureError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  const normalized = message.toLowerCase();
+  return (normalized.includes('unknown action') && normalized.includes('network-capture'))
+    || (normalized.includes('network capture') && normalized.includes('not supported'));
+}
+
+export function isRetryableSettleError(err: unknown): boolean {
   const message = err instanceof Error ? err.message : String(err);
   const normalized = message.toLowerCase();
   return (normalized.includes('unknown action') && normalized.includes('network-capture'))
@@ -463,5 +478,12 @@ export class Page extends BasePage {
       key,
       modifiers: modifierFlags,
     });
+  }
+}
+
+function ensureNavigationSucceeded(targetUrl: string, result: NavigateResult | undefined): void {
+  const finalUrl = typeof result?.url === 'string' ? result.url : undefined;
+  if (finalUrl === BLANK_PAGE) {
+    throw new Error(`Navigation failed for ${targetUrl}: browser remained on ${BLANK_PAGE}`);
   }
 }

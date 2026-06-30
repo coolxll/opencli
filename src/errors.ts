@@ -37,6 +37,21 @@ export const EXIT_CODES = {
 
 export type ExitCode = typeof EXIT_CODES[keyof typeof EXIT_CODES];
 
+// ── Error icons by code ─────────────────────────────────────────────────────
+
+export const ERROR_ICONS: Record<string, string> = {
+  BROWSER_CONNECT: '🌐',
+  AUTH_REQUIRED: '🔐',
+  TIMEOUT: '⏱️',
+  ARGUMENT: '💡',
+  EMPTY_RESULT: '📭',
+  CONFIG: '⚙️',
+  SELECTOR: '🎯',
+  PLUGIN: '🔌',
+  LOGIN_WALL: '🚧',
+  COMMAND_EXECUTION: '💥',
+};
+
 // ── Base class ───────────────────────────────────────────────────────────────
 
 export class CliError extends Error {

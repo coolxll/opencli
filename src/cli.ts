@@ -14,13 +14,15 @@ import { findPackageRoot, getBuiltEntryCandidates } from './package-paths.js';
 import { type CliCommand, fullName, getRegistry, strategyLabel } from './registry.js';
 import { serializeCommand, formatArgSummary } from './serialization.js';
 import { render as renderOutput } from './output.js';
+import { getBrowserFactory, browserSession } from './runtime.js';
+import { addBrowserEnvOverrideOptions, runWithBrowserEnvOptions } from './browserEnvOptions.js';
 import { PKG_VERSION } from './version.js';
 import { printCompletionScript } from './completion.js';
 import { loadExternalClis, executeExternalCli, installExternalCli, registerExternalCli, isBinaryInstalled, formatExternalCliLabel } from './external.js';
 import { listOpenCliSkills, readOpenCliSkill } from './skills.js';
 import { registerAllCommands } from './commanderAdapter.js';
 import { classifyAdapter, formatRootAdapterHelpText, installCommanderNamespaceStructuredHelp, installStructuredHelp, leadingPositionalFromUsage, rootHelpData, type RootAdapterGroups } from './help.js';
-import { EXIT_CODES, getErrorMessage, BrowserConnectError, CliError } from './errors.js';
+import { EXIT_CODES, getErrorMessage, BrowserConnectError, CliError, ERROR_ICONS } from './errors.js';
 import { TargetError, type TargetErrorCode } from './browser/target-errors.js';
 import { resolveTargetJs, getTextResolvedJs, getValueResolvedJs, getAttributesResolvedJs, selectResolvedJs, isAutocompleteResolvedJs, type ResolveOptions, type TargetMatchLevel } from './browser/target-resolver.js';
 import { buildFindJs, buildSemanticFindJs, isFindError, type FindResult, type FindError, type SemanticFindOptions } from './browser/find.js';
@@ -817,6 +819,39 @@ export function createProgram(BUILTIN_CLIS: string, USER_CLIS: string): Command 
       });
     });
 
+  addBrowserEnvOverrideOptions(
+    program
+    .command('explore')
+    .alias('probe')
+    .description('Explore a website: discover APIs, stores, and recommend strategies')
+    .argument('<url>')
+    .option('--site <name>')
+    .option('--goal <text>')
+    .option('--wait <s>', '', '3')
+    .option('--auto', 'Enable interactive fuzzing')
+    .option('--click <labels>', 'Comma-separated labels to click before fuzzing'),
+    { allowBrowserCdp: true },
+  )
+    .action(async (url, opts) => {
+      await runWithBrowserEnvOptions(opts, async () => {
+        const { exploreUrl, renderExploreSummary } = await import('./explore.js');
+        const clickLabels = opts.click
+          ? opts.click.split(',').map((s: string) => s.trim())
+          : undefined;
+        const workspace = `explore:${inferHost(url, opts.site)}`;
+        const result = await exploreUrl(url, {
+          BrowserFactory: getBrowserFactory(),
+          site: opts.site,
+          goal: opts.goal,
+          waitSeconds: parseFloat(opts.wait),
+          auto: opts.auto,
+          clickLabels,
+          workspace,
+        });
+        console.log(renderExploreSummary(result));
+      }, { allowBrowserCdp: true });
+    });
+
   skillsCmd
     .command('read')
     .description("Print an opencli-* skill's SKILL.md or reference file")
@@ -866,7 +901,85 @@ export function createProgram(BUILTIN_CLIS: string, USER_CLIS: string): Command 
       if (opts.strict && !report.ok) process.exitCode = EXIT_CODES.GENERIC_ERROR;
     });
 
-  // ── Built-in: browser (browser control for Claude Code skill) ───────────────
+  addBrowserEnvOverrideOptions(
+    program
+    .command('generate')
+    .description('One-shot: explore → synthesize → register')
+    .argument('<url>')
+    .option('--goal <text>')
+    .option('--site <name>'),
+    { allowBrowserCdp: true },
+  )
+    .action(async (url, opts) => {
+      await runWithBrowserEnvOptions(opts, async () => {
+        const { generateCliFromUrl, renderGenerateSummary } = await import('./generate.js');
+        const workspace = `generate:${inferHost(url, opts.site)}`;
+        const r = await generateCliFromUrl({
+          url,
+          BrowserFactory: getBrowserFactory(),
+          goal: opts.goal,
+          site: opts.site,
+          workspace,
+        });
+        console.log(renderGenerateSummary(r));
+        process.exitCode = r.ok ? EXIT_CODES.SUCCESS : EXIT_CODES.GENERIC_ERROR;
+      }, { allowBrowserCdp: true });
+    });
+
+  // ── Built-in: record ─────────────────────────────────────────────────────
+
+  addBrowserEnvOverrideOptions(
+    program
+    .command('record')
+    .description('Record API calls from a live browser session → generate YAML candidates')
+    .argument('<url>', 'URL to open and record')
+    .option('--site <name>', 'Site name (inferred from URL if omitted)')
+    .option('--out <dir>', 'Output directory for candidates')
+    .option('--poll <ms>', 'Poll interval in milliseconds', '2000')
+    .option('--timeout <ms>', 'Auto-stop after N milliseconds (default: 60000)', '60000'),
+    { allowBrowserCdp: true },
+  )
+    .action(async (url, opts) => {
+      await runWithBrowserEnvOptions(opts, async () => {
+        const { recordSession, renderRecordSummary } = await import('./record.js');
+        const result = await recordSession({
+          BrowserFactory: getBrowserFactory(),
+          url,
+          site: opts.site,
+          outDir: opts.out,
+          pollMs: parseInt(opts.poll, 10),
+          timeoutMs: parseInt(opts.timeout, 10),
+        });
+        console.log(renderRecordSummary(result));
+        process.exitCode = result.candidateCount > 0 ? EXIT_CODES.SUCCESS : EXIT_CODES.EMPTY_RESULT;
+      }, { allowBrowserCdp: true });
+    });
+
+  addBrowserEnvOverrideOptions(
+    program
+    .command('cascade')
+    .description('Strategy cascade: find simplest working strategy')
+    .argument('<url>')
+    .option('--site <name>'),
+    { allowBrowserCdp: true },
+  )
+    .action(async (url, opts) => {
+      await runWithBrowserEnvOptions(opts, async () => {
+        const { cascadeProbe, renderCascadeResult } = await import('./cascade.js');
+        const workspace = `cascade:${inferHost(url, opts.site)}`;
+        const result = await browserSession(getBrowserFactory(), async (page) => {
+          try {
+            const siteUrl = new URL(url);
+            await page.goto(`${siteUrl.protocol}//${siteUrl.host}`);
+            await page.wait(2);
+          } catch {}
+          return cascadeProbe(page, url);
+        }, { workspace });
+        console.log(renderCascadeResult(result));
+      }, { allowBrowserCdp: true });
+    });
+
+  // ── Built-in: operate (browser control for Claude Code skill) ───────────────
   //
   // Make websites accessible for AI agents.
   // All commands wrapped in browserAction() for consistent error handling.
@@ -3476,24 +3589,130 @@ cli({
   // ── Antigravity serve (long-running, special case) ────────────────────────
 
   const antigravityCmd = program.command('antigravity').description('antigravity commands');
-  antigravityCmd
+  addBrowserEnvOverrideOptions(
+    antigravityCmd
     .command('serve')
     .description('Start Anthropic-compatible API proxy for Antigravity')
     .option('--port <port>', 'Server port (default: 8082)', '8082')
-    .option('--timeout <seconds>', 'Maximum time to wait for a reply (default: 120s)')
+    .option('--timeout <seconds>', 'Maximum time to wait for a reply (default: 120s)'),
+  )
     .action(async (opts) => {
-      // @ts-expect-error JS adapter — no type declarations
-      const { startServe } = await import('../../clis/antigravity/serve.js');
-      await startServe({
-        port: parseInt(opts.port, 10),
-        timeout: opts.timeout ? parsePositiveIntOption(opts.timeout, '--timeout', 120) : undefined,
+      await runWithBrowserEnvOptions(opts, async () => {
+        // @ts-expect-error JS adapter — no type declarations
+        const { startServe } = await import('../../clis/antigravity/serve.js');
+        await startServe({
+          port: parseInt(opts.port, 10),
+          timeout: opts.timeout ? parsePositiveIntOption(opts.timeout, '--timeout', 120) : undefined,
+        });
       });
+    });
+
+  const lingmaCmd = program.command('lingma').description('lingma commands');
+  addBrowserEnvOverrideOptions(
+    lingmaCmd
+    .command('serve')
+    .description('Start Anthropic-compatible API proxy for Lingma')
+    .option('--port <port>', 'Server port (default: 8083)', '8083')
+    .option('--session-mode <mode>', 'Session handling mode: auto, fresh, reuse', 'auto'),
+    { allowBrowserCdp: true },
+  )
+    .action(async (opts) => {
+      await runWithBrowserEnvOptions(opts, async () => {
+        const { startServe } = await import('./clis/lingma/serve.js');
+        await startServe({
+          port: parseInt(opts.port),
+          sessionMode: opts.sessionMode,
+        });
+      }, { allowBrowserCdp: true });
+    });
+
+  const lingmaIpcCmd = lingmaCmd.command('ipc').description('Lingma native IPC commands');
+
+  lingmaIpcCmd
+    .command('probe')
+    .description('Probe Lingma named-pipe IPC and summarize live capabilities')
+    .option('--pipe <path>', 'Explicit Lingma named pipe path (for example: \\\\.\\pipe\\lingma-xxxx)')
+    .option('-f, --format <fmt>', 'Output format: table, json, yaml, md, csv', 'table')
+    .option('-v, --verbose', 'Debug output', false)
+    .action(async (opts) => {
+      await runManualRenderedCommand(async () => {
+        const { probeLingmaIpc } = await import('./clis/lingma/ipc-probe.js');
+        const result = await probeLingmaIpc({ pipe: opts.pipe });
+        renderOutput(result, {
+          fmt: opts.format,
+          columns: ['Key', 'Value'],
+          title: 'lingma/ipc-probe',
+          source: 'opencli lingma ipc probe',
+        });
+      }, opts.verbose === true);
+    });
+
+  lingmaIpcCmd
+    .command('ask')
+    .description('Send a prompt through Lingma native IPC and wait for the streamed response')
+    .argument('<text>', 'Prompt text to send')
+    .option('--pipe <path>', 'Explicit Lingma named pipe path (for example: \\\\.\\pipe\\lingma-xxxx)')
+    .option('--session-id <id>', 'Reuse an existing Lingma ACP session id instead of creating a new one')
+    .option('--cwd <path>', 'Working directory used when creating a new IPC session', process.cwd())
+    .option('--current-file-path <path>', 'Current file path sent through ACP meta')
+    .option('--mode <mode>', 'ACP mode meta value (default: agent)', 'agent')
+    .option('--model <id>', 'Model id passed to session/set_model before prompting')
+    .option('--timeout <seconds>', 'Max seconds to wait for completion (default: 60)', '60')
+    .option('-f, --format <fmt>', 'Output format: table, json, yaml, md, csv', 'table')
+    .option('-v, --verbose', 'Debug output', false)
+    .action(async (text, opts) => {
+      await runManualRenderedCommand(async () => {
+        const { askLingmaIpc } = await import('./clis/lingma/ipc-ask.js');
+        const result = await askLingmaIpc({
+          text,
+          pipe: opts.pipe,
+          sessionId: opts.sessionId,
+          cwd: opts.cwd,
+          currentFilePath: opts.currentFilePath,
+          timeoutSeconds: parseInt(opts.timeout, 10) || 60,
+          mode: opts.mode,
+          model: opts.model,
+        });
+        renderOutput(result, {
+          fmt: opts.format,
+          columns: ['Role', 'Type', 'Text'],
+          title: 'lingma/ipc-ask',
+          source: 'opencli lingma ipc ask',
+        });
+      }, opts.verbose === true);
+    });
+
+  lingmaIpcCmd
+    .command('serve')
+    .description('Start Anthropic-compatible API proxy for Lingma over native IPC')
+    .option('--port <port>', 'Server port (default: 8084)', '8084')
+    .option('--session-mode <mode>', 'Session handling mode: auto, fresh, reuse', 'auto')
+    .option('--pipe <path>', 'Explicit Lingma named pipe path (for example: \\\\.\\pipe\\lingma-xxxx)')
+    .option('--cwd <path>', 'Working directory used when creating new IPC sessions', process.cwd())
+    .option('--current-file-path <path>', 'Current file path sent through ACP meta')
+    .option('--mode <mode>', 'ACP mode meta value (default: agent)', 'agent')
+    .option('--timeout <seconds>', 'Max seconds to wait for each completion (default: 120)', '120')
+    .option('-v, --verbose', 'Debug output', false)
+    .action(async (opts) => {
+      await runManualRenderedCommand(async () => {
+        const { startIpcServe } = await import('./clis/lingma/ipc-serve.js');
+        await startIpcServe({
+          port: parseInt(opts.port, 10) || 8084,
+          sessionMode: opts.sessionMode,
+          pipe: opts.pipe,
+          cwd: opts.cwd,
+          currentFilePath: opts.currentFilePath,
+          timeoutSeconds: parseInt(opts.timeout, 10) || 120,
+          mode: opts.mode,
+        });
+      }, opts.verbose === true);
     });
 
   // ── Dynamic adapter commands ──────────────────────────────────────────────
 
   const siteGroups = new Map<string, Command>();
   siteGroups.set('antigravity', antigravityCmd);
+  siteGroups.set('lingma', lingmaCmd);
   const siteNames = registerAllCommands(program, siteGroups);
   applyRootSubcommandSummaries(program);
 
@@ -3624,4 +3843,36 @@ export function resolveBrowserVerifyInvocation(opts: {
     cwd: projectRoot,
     ...(platform === 'win32' ? { shell: true } : {}),
   };
+}
+
+async function runManualRenderedCommand(
+  fn: () => Promise<void>,
+  verbose: boolean = false,
+): Promise<void> {
+  try {
+    await fn();
+  } catch (err) {
+    if (err instanceof CliError) {
+      const icon = ERROR_ICONS[err.code] ?? '⚠️';
+      console.error(`${icon} ${err.message}`);
+      if (err.hint) console.error(`→ ${err.hint}`);
+      process.exitCode = 1;
+      return;
+    }
+
+    if (verbose && err instanceof Error && err.stack) {
+      console.error(err.stack);
+      process.exitCode = 1;
+      return;
+    }
+
+    console.error(`Error: ${getErrorMessage(err)}`);
+    process.exitCode = 1;
+  }
+}
+
+/** Infer a workspace-friendly hostname from a URL, with site override. */
+function inferHost(url: string, site?: string): string {
+  if (site) return site;
+  try { return new URL(url).host; } catch { return 'default'; }
 }

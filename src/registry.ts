@@ -34,16 +34,24 @@ export interface AuthStatusMetadata {
   refresh?: BrowserCommandFunc;
 }
 
+export interface RequiredEnv {
+  name: string;
+  help?: string;
+}
+
 interface BaseCliCommand {
   site: string;
   name: string;
   aliases?: string[];
   description: string;
-  access: CommandAccess;
+  access?: CommandAccess;
+  requiredEnv?: RequiredEnv[];
   /** Canonical invocation shown in agent-facing help. Generated when omitted. */
   example?: string;
   domain?: string;
   strategy?: Strategy;
+  browser?: boolean;
+  supportsBrowserCdp?: boolean;
   args: Arg[];
   columns?: string[];
   pipeline?: Record<string, unknown>[];
@@ -75,6 +83,10 @@ interface BaseCliCommand {
   defaultFormat?: 'table' | 'plain' | 'json' | 'yaml' | 'yml' | 'md' | 'markdown' | 'csv';
   /** Optional auth-status metadata attached by shared auth adapters. */
   authStatus?: AuthStatusMetadata;
+  /** Mark this command as deprecated. */
+  deprecated?: boolean | string;
+  /** Suggested replacement command. */
+  replacedBy?: string;
 }
 
 export interface BrowserCliCommand extends BaseCliCommand {
@@ -104,7 +116,7 @@ export type InternalCliCommand = CliCommand & {
 type RequiredCliOptions = {
   site: string;
   name: string;
-  access: CommandAccess;
+  access?: CommandAccess;
   description?: string;
   args?: Arg[];
 };
@@ -121,6 +133,31 @@ type NonBrowserCliOptions = Partial<Omit<NonBrowserCliCommand, 'args' | 'descrip
 
 export type CliOptions = BrowserCliOptions | NonBrowserCliOptions;
 
+function isLocalUiDomain(domain?: string): boolean {
+  const normalized = domain?.trim().toLowerCase();
+  if (!normalized) return true;
+  return normalized === 'localhost'
+    || normalized === '127.0.0.1'
+    || normalized === '::1'
+    || normalized === '[::1]'
+    || !normalized.includes('.');
+}
+
+export function deriveSupportsBrowserCdp(opts: {
+  browser?: boolean;
+  strategy?: Strategy;
+  domain?: string;
+  supportsBrowserCdp?: boolean;
+}): boolean {
+  if (typeof opts.supportsBrowserCdp === 'boolean') return opts.supportsBrowserCdp;
+
+  const strategy = opts.strategy ?? (opts.browser === false ? Strategy.PUBLIC : Strategy.COOKIE);
+  const browser = opts.browser ?? (strategy !== Strategy.PUBLIC);
+  if (!browser) return false;
+  if (strategy !== Strategy.UI) return true;
+  return !isLocalUiDomain(opts.domain);
+}
+
 // Use globalThis to ensure a single shared registry across all module instances.
 // This is critical for TS plugins loaded via npm link / peerDependency — without
 // this, the plugin's import creates a separate module instance with its own Map.
@@ -129,6 +166,8 @@ const _registry: Map<string, CliCommand> =
   globalThis.__opencli_registry__ ??= new Map<string, CliCommand>();
 
 export function cli(opts: CliOptions): CliCommand {
+  const strategy = opts.strategy ?? ('browser' in opts && opts.browser === false ? Strategy.PUBLIC : Strategy.COOKIE);
+  const browser = opts.browser ?? (strategy !== Strategy.PUBLIC && strategy !== Strategy.LOCAL);
   const cmd: RawCliCommand = {
     site: opts.site,
     name: opts.name,
@@ -137,8 +176,14 @@ export function cli(opts: CliOptions): CliCommand {
     access: opts.access,
     example: opts.example,
     domain: opts.domain,
-    strategy: opts.strategy,
-    browser: opts.browser,
+    strategy,
+    browser,
+    supportsBrowserCdp: deriveSupportsBrowserCdp({
+      browser,
+      strategy,
+      domain: opts.domain,
+      supportsBrowserCdp: opts.supportsBrowserCdp,
+    }),
     args: opts.args ?? [],
     columns: opts.columns,
     func: opts.func,

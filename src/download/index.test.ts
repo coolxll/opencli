@@ -72,7 +72,7 @@ describe('download helpers', { retry: process.platform === 'win32' ? 2 : 0 }, ()
       forwardedCookie = req.headers.cookie;
       res.statusCode = 200;
       res.end('ok');
-    }, 'localhost');
+    }, '127.0.0.2');
 
     const redirectUrl = await startServer((_req, res) => {
       res.statusCode = 302;
@@ -96,7 +96,7 @@ describe('download helpers', { retry: process.platform === 'win32' ? 2 : 0 }, ()
       forwardedCookie = req.headers.cookie;
       res.statusCode = 200;
       res.end('ok');
-    }, 'localhost');
+    }, '127.0.0.2');
 
     const redirectUrl = await startServer((_req, res) => {
       res.statusCode = 302;

@@ -172,6 +172,7 @@ Run `opencli list` for the live registry.
 | **[Codex](./desktop/codex.md)**             | Drive OpenAI Codex CLI agent  | `status` `send` `read` `new` `extract-diff` `model` `ask` `screenshot` `history` `export` `pin` `unpin` `archive` `rename` |
 | **[Trae CN](./desktop/trae-cn.md)**         | Control Trae CN tasks         | `setup` `targets` `status` `new` `send` `read` `ask` `approve` `model` `select-model` `activity` `watch` `dump` `screenshot` `export` |
 | **[Antigravity](./desktop/antigravity.md)** | Control Antigravity Ultra     | `status` `send` `read` `new` `dump` `extract-code` `model` `watch`                                          |
+| **[Lingma](./desktop/lingma.md)**           | Control Lingma Desktop        | `status` `send` `read` `new` `dump` `screenshot` `ask` `model` `probe-network`                              |
 | **[ChatGPT App](./desktop/chatgpt-app.md)** | Automate ChatGPT macOS app    | `status` `new` `send` `read` `ask` `model`                                                                  |
 | **[ChatWise](./desktop/chatwise.md)**       | Multi-LLM client              | `status` `new` `send` `read` `ask` `model` `history` `export` `screenshot`                                  |
 | **[Qoder](./desktop/qoder.md)**             | Control Qoder IDE             | `status` `new` `history` `send` `ask` `read` `search` `settings` `knowledge` `marketplace` `credits` `view-all` `add-workspace` `account` `more-actions` `prompt-enhance` `open-editor` `sidebar-toggle` `open-panel` |
