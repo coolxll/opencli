@@ -21,7 +21,16 @@ OpenCLI 可以用同一套 CLI 做三类事情：
 
 ### 1. 安装 OpenCLI
 
-OpenCLI 要求 **Node.js >= 20**。
+如果你是在自己的电脑上使用，优先安装 **OpenCLIApp**。它会内置
+OpenCLI runtime，帮你安装 / 修复受管理的 `opencli` 命令，并提供系统托盘
+UI 来做环境诊断、更新、浏览器登录态保活和网页转 Markdown。
+
+**方式 A — OpenCLIApp（macOS / Windows 推荐）：**
+从 <https://opencli.info/download> 下载最新版 App，安装后打开一次，在
+System 页面安装或修复 `opencli` 命令。
+
+**方式 B — npm 全局安装（纯 CLI / CI / 服务器）：**
+通过 npm 安装时，OpenCLI 要求 **Node.js >= 20**。
 
 ```bash
 node --version
@@ -148,7 +157,7 @@ Agent 在内部自动处理所有 `opencli browser` 命令——你只需用自�
 |------|--------|------|
 | `OPENCLI_DAEMON_PORT` | `19825` | daemon-extension 通信端口 |
 | `OPENCLI_WINDOW` | 命令默认值 | 设为 `foreground` 或 `background` 来覆盖 Browser Bridge 窗口位置。浏览器型命令也支持 `--window <foreground\|background>` |
-| `OPENCLI_BROWSER_CONNECT_TIMEOUT` | `30` | 浏览器连接超时（秒） |
+| `OPENCLI_BROWSER_CONNECT_TIMEOUT` | `45` | 浏览器连接超时（秒） |
 | `OPENCLI_BROWSER_COMMAND_TIMEOUT` | `60` | 单个浏览器命令超时（秒） |
 | `OPENCLI_CDP_ENDPOINT` | — | Chrome DevTools Protocol 端点，用于远程浏览器或 Electron 应用 |
 | `OPENCLI_CDP_TARGET` | — | 按 URL 子串过滤 CDP target（如 `detail.1688.com`） |
@@ -161,79 +170,24 @@ Agent 在内部自动处理所有 `opencli browser` 命令——你只需用自�
 
 运行 `opencli list` 查看完整注册表。
 
-| 站点 | 命令 | 模式 |
-|------|------|------|
-| **twitter** | `trending` `bookmarks` `profile` `search` `timeline` `thread` `following` `followers` `notifications` `post` `reply` `delete` `like` `article` `follow` `unfollow` `bookmark` `unbookmark` `download` `accept` `reply-dm` `block` `unblock` `hide-reply` | 浏览器 |
-| **reddit** | `hot` `frontpage` `popular` `search` `subreddit` `read` `user` `user-posts` `user-comments` `upvote` `save` `comment` `subscribe` `saved` `upvoted` | 浏览器 |
-| **tieba** | `hot` `posts` `search` `read` | 浏览器 |
-| **cursor** | `status` `send` `read` `new` `dump` `composer` `model` `extract-code` `ask` `screenshot` `history` `export` | 桌面端 |
-| **bilibili** | `hot` `search` `me` `favorite` `history` `feed` `subtitle` `dynamic` `ranking` `following` `user-videos` `download` | 浏览器 |
-| **codex** | `status` `send` `read` `new` `dump` `extract-diff` `model` `ask` `screenshot` `history` `export` | 桌面端 |
-| **chatwise** | `status` `new` `send` `read` `ask` `model` `history` `export` `screenshot` | 桌面端 |
-| **doubao** | `status` `new` `send` `read` `ask` `history` `detail` `meeting-summary` `meeting-transcript` | 浏览器 |
-| **doubao-app** | `status` `new` `send` `read` `ask` `screenshot` `dump` | 桌面端 |
-| **notion** | `status` `search` `read` `new` `write` `sidebar` `favorites` `export` | 桌面端 |
-| **discord-app** | `status` `send` `read` `channels` `servers` `search` `members` | 桌面端 |
-| **v2ex** | `hot` `latest` `topic` `node` `user` `member` `replies` `nodes` `daily` `me` `notifications` | 公开 / 浏览器 |
-| **xueqiu** | `feed` `hot-stock` `hot` `search` `stock` `comments` `watchlist` `earnings-date` `fund-holdings` `fund-snapshot` | 浏览器 |
-| **antigravity** | `status` `send` `read` `new` `dump` `extract-code` `model` `watch` | 桌面端 |
-| **lingma** | `status` `send` `read` `new` `dump` `screenshot` `ask` `model` `probe-network` | 桌面端 |
-| **chatgpt** | `status` `new` `send` `read` `ask` `model` | 桌面端 |
-| **xiaohongshu** | `search` `notifications` `feed` `user` `download` `publish` `creator-notes` `creator-note-detail` `creator-notes-summary` `creator-profile` `creator-stats` | 浏览器 |
-| **apple-podcasts** | `search` `episodes` `top` | 公开 |
-| **xiaoyuzhou** | `podcast` `podcast-episodes` `episode` | 公开 |
-| **zhihu** | `hot` `search` `question` `download` | 浏览器 |
-| **weixin** | `download` | 浏览器 |
-| **youtube** | `search` `video` `transcript` | 浏览器 |
-| **boss** | `search` `detail` `recommend` `joblist` `greet` `batchgreet` `send` `chatlist` `chatmsg` `invite` `mark` `exchange` `resume` `stats` | 浏览器 |
-| **coupang** | `search` `add-to-cart` | 浏览器 |
-| **bbc** | `news` | 公共 API |
-| **bloomberg** | `main` `markets` `economics` `industries` `tech` `politics` `businessweek` `opinions` `feeds` `news` | 公共 API / 浏览器 |
-| **ctrip** | `search` | 浏览器 |
-| **devto** | `top` `tag` `user` | 公开 |
-| **dictionary** | `search` `synonyms` `examples` | 公开 |
-| **arxiv** | `search` `paper` | 公开 |
-| **paperreview** | `submit` `review` `feedback` | 公开 |
-| **wikipedia** | `search` `summary` `random` `trending` | 公开 |
-| **hackernews** | `top` `new` `best` `ask` `show` `jobs` `search` `user` | 公共 API |
-| **jd** | `item` | 浏览器 |
-| **linkedin** | `search` `timeline` | 浏览器 |
-| **reuters** | `search` | 浏览器 |
-| **smzdm** | `search` | 浏览器 |
-| **web** | `read` | 浏览器 |
-| **weibo** | `hot` `search` | 浏览器 |
-| **yahoo-finance** | `quote` | 浏览器 |
-| **sinafinance** | `news` | 🌐 公开 |
-| **barchart** | `quote` `options` `greeks` `flow` | 浏览器 |
-| **chaoxing** | `assignments` `exams` | 浏览器 |
-| **grok** | `ask` | 浏览器 |
-| **hf** | `top` | 公开 |
-| **jike** | `feed` `search` `create` `like` `comment` `repost` `notifications` `post` `topic` `user` | 浏览器 |
-| **jimeng** | `generate` `history` | 浏览器 |
-| **yollomi** | `generate` `video` `edit` `upload` `models` `remove-bg` `upscale` `face-swap` `restore` `try-on` `background` `object-remover` | 浏览器 |
-| **linux-do** | `feed` `categories` `tags` `search` `topic` `user-topics` `user-posts` | 浏览器 |
-| **stackoverflow** | `hot` `search` `bounties` `unanswered` | 公开 |
-| **steam** | `top-sellers` | 公开 |
-| **weread** | `shelf` `search` `book` `highlights` `notes` `notebooks` `ranking` | 浏览器 |
-| **douban** | `search` `top250` `subject` `photos` `download` `marks` `reviews` `movie-hot` `book-hot` | 浏览器 |
-| **facebook** | `feed` `profile` `search` `friends` `groups` `events` `notifications` `memories` `add-friend` `join-group` | 浏览器 |
-| **google** | `news` `search` `suggest` `trends` | 公开 |
-| **amazon** | `bestsellers` `search` `product` `offer` `discussion` | 浏览器 |
-| **gemini** | `new` `ask` `image` | 浏览器 |
-| **spotify** | `auth` `status` `play` `pause` `next` `prev` `volume` `search` `queue` `shuffle` `repeat` | OAuth API |
-| **notebooklm** | `status` `list` `open` `select` `current` `get` `metadata` `source-list` `source-get` `source-fulltext` `source-guide` `history` `note-list` `notes-list` `notes-get` `summary` | 浏览器 |
-| **36kr** | `news` `hot` `search` `article` | 公开 / 浏览器 |
-| **imdb** | `search` `title` `top` `trending` `person` `reviews` | 公开 |
-| **producthunt** | `posts` `today` `hot` `browse` | 公开 / 浏览器 |
-| **instagram** | `explore` `profile` `search` `user` `followers` `following` `follow` `unfollow` `like` `unlike` `comment` `save` `unsave` `saved` | 浏览器 |
-| **lobsters** | `hot` `newest` `active` `tag` | 公开 |
-| **medium** | `feed` `search` `user` | 浏览器 |
-| **sinablog** | `hot` `search` `article` `user` | 浏览器 |
-| **substack** | `feed` `search` `publication` | 浏览器 |
-| **pixiv** | `ranking` `search` `user` `illusts` `detail` `download` | 浏览器 |
-| **tiktok** | `explore` `search` `profile` `user` `following` `follow` `unfollow` `like` `unlike` `comment` `save` `unsave` `live` `notifications` `friends` | 浏览器 |
-| **bluesky** | `search` `trending` `user` `profile` `thread` `feeds` `followers` `following` `starter-packs` | 公开 |
-| **douyin** | `videos` `publish` `drafts` `draft` `delete` `stats` `profile` `update` `hashtag` `location` `activities` `collections` | 浏览器 |
+| 站点 | 命令 |
+|------|------|
+| **xiaohongshu** | `search` `ask` `note` `comments` `notifications` `feed` `user` `saved` `liked` `download` `publish` `follow` `unfollow` `creator-notes` `creator-note-detail` `creator-notes-summary` `creator-profile` `creator-stats` |
+| **bilibili** | `hot` `search` `me` `favorite` `history` `feed` `subtitle` `summary` `video` `comments` `dynamic` `ranking` `following` `follow` `unfollow` `user-videos` `download` |
+| **zhihu** | `hot` `search` `question` `download` `follow` `like` `favorite` `comment` `answer` |
+| **hackernews** | `top` `new` `best` `ask` `show` `jobs` `search` `user` |
+| **hltv** | `search` `player-summary` `player-matches` `player-form` `player-map-pool` `player-vs-team` `player-teammate-impact` `player-duel` `match-map` `match-series` `team-matches` `team-map-pool` `event-matches` |
+| **geogebra** | `eval` `add-point` `add-line` `add-circle` `add-polygon` `triangle` `hexagon` `list` `info` |
+| **linkedin** | `connect` `inbox` `job-detail` `jobs-preferences` `post-analytics` `posts` `profile-experience` `profile-projects` `profile-read` `profile-analytics` `safe-send` `search` `people-search` `services-read` `sent-invitations` `thread-snapshot` `timeline` `salesnav-search` `salesnav-inbox` `salesnav-message` `salesnav-thread` |
+| **reddit** | `hot` `frontpage` `popular` `search` `subreddit` `read` `user` `user-posts` `user-comments` `upvote` `save` `comment` `subscribe` `saved` `upvoted` |
+| **twitter** | `trending` `search` `timeline` `tweets` `lists` `list-tweets` `list-create` `list-delete` `list-add` `list-add-batch` `list-remove` `list-remove-batch` `bookmarks` `profile` `thread` `following` `followers` `notifications` `post` `reply` `delete` `like` `likes` `article` `follow` `unfollow` `bookmark` `unbookmark` `download` `accept` `reply-dm` `block` `unblock` `hide-reply` |
+| **claude** | `ask` `send` `new` `status` `read` `history` `detail` |
+| **gemini** | `new` `ask` `image` `deep-research` `deep-research-result` |
+| **notebooklm** | `status` `list` `open` `current` `get` `history` `summary` `note-list` `notes-get` `source-list` `source-get` `source-fulltext` `source-guide` |
+| **amazon** | `bestsellers` `search` `product` `offer` `discussion` `movers-shakers` `new-releases` `rankings` |
+| **upwork** | `search` `feed` `detail` |
+| **slock** | `message-send` `message-read` `message-search` `channel-list` `channel-info` `channel-create` `channel-members` `channel-join` `task-list` `task-create` `task-claim` `task-status` `task-convert` `task-delete` `thread-list` `thread-follow` `attachment-upload` `attachment-download` `bookmark-add` `inbox` `dm-list` `server-list` `server-use` `whoami` |
+| **huodongxing** | `events` |
 
 精选清单 — **[→ 查看全部 100+ 站点和命令](./docs/adapters/index.md)**（小红书 / B站 / 知乎 / Twitter / Reddit / 抖音 / 微博 / 微信读书 / 小宇宙 / 1688 / 夸克 / Spotify / 牛客 / arxiv / Chess.com / Bilibili / 等）。
 
@@ -245,29 +199,7 @@ Agent 在内部自动处理所有 `opencli browser` 命令——你只需用自�
 
 注册自定义本地 CLI：`opencli external register <name>`；查看所有：`opencli external list`。
 
-**自动安装**：如果你运行 `opencli gh ...` 时系统中还没有 `gh`，OpenCLI 会优先尝试通过系统包管理器安装，然后自动重试命令。
-
-**注册自定义本地 CLI**：
-
-```bash
-opencli register mycli
-```
-
-### 桌面应用适配器
-
-每个桌面适配器都有自己详细的文档说明，包括命令参考、启动配置与使用示例：
-
-| 应用 | 描述 | 文档 |
-|-----|-------------|-----|
-| **Cursor** | 控制 Cursor IDE — Composer、对话、代码提取等 | [Doc](./docs/adapters/desktop/cursor.md) |
-| **Codex** | 在后台（无头）驱动 OpenAI Codex CLI Agent | [Doc](./docs/adapters/desktop/codex.md) |
-| **Antigravity** | 在终端直接控制 Antigravity Ultra | [Doc](./docs/adapters/desktop/antigravity.md) |
-| **Lingma** | 通过 CDP 或原生 IPC 控制 Lingma 桌面应用 | [Doc](./docs/adapters/desktop/lingma.md) |
-| **ChatGPT** | 自动化操作 ChatGPT macOS 桌面客户端 | [Doc](./docs/adapters/desktop/chatgpt.md) |
-| **ChatWise** | 多 LLM 客户端（GPT-4、Claude、Gemini） | [Doc](./docs/adapters/desktop/chatwise.md) |
-| **Notion** | 搜索、读取、写入 Notion 页面 | [Doc](./docs/adapters/desktop/notion.md) |
-| **Discord** | Discord 桌面版 — 消息、频道、服务器 | [Doc](./docs/adapters/desktop/discord.md) |
-| **Doubao** | 通过 CDP 控制豆包桌面应用 | [Doc](./docs/adapters/desktop/doubao-app.md) |
+**桌面应用适配器**（Electron，通过 CDP）：Cursor / Trae CN / Codex / Antigravity / ChatGPT App / ChatWise / Qoder / Discord / Doubao / Trae SOLO — 详见 [`docs/adapters/desktop/`](./docs/adapters/desktop/)。
 
 ## 下载支持
 

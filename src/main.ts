@@ -23,6 +23,7 @@ import { PKG_VERSION } from './version.js';
 import { maybeRelaunchWithEnvProxy } from './env-proxy.js';
 import { EXIT_CODES } from './errors.js';
 import { isSupportedNodeVersion, MIN_SUPPORTED_NODE_MAJOR } from './runtime-detect.js';
+import { isIgnorableDaemonPortEnv, unsupportedDaemonPortEnvMessage } from './constants.js';
 
 maybeRelaunchWithEnvProxy();
 
@@ -46,6 +47,11 @@ if (typeof (globalThis as { Bun?: unknown }).Bun === 'undefined' && !isSupported
       '',
     ].join('\n'),
   );
+  process.exit(EXIT_CODES.CONFIG_ERROR);
+}
+
+if (!isIgnorableDaemonPortEnv(process.env.OPENCLI_DAEMON_PORT)) {
+  process.stderr.write(`error: ${unsupportedDaemonPortEnvMessage(process.env.OPENCLI_DAEMON_PORT)}\n`);
   process.exit(EXIT_CODES.CONFIG_ERROR);
 }
 
