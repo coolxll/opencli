@@ -34,6 +34,7 @@
     "dist/src/",
     "clis/",
     "skills/opencli-*/**",
+    "skills/smart-search/**",
     "cli-manifest.json",
     "scripts/",
     "README.md",

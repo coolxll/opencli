@@ -124,6 +124,8 @@ async function loadFromManifest(manifestPath: string, clisDir: string): Promise<
           name: entry.name,
           aliases: entry.aliases,
           description: entry.description ?? '',
+          access: entry.access,
+          example: entry.example,
           domain: entry.domain,
           strategy,
           browser: entry.browser,
@@ -135,15 +137,18 @@ async function loadFromManifest(manifestPath: string, clisDir: string): Promise<
           }),
           args: entry.args ?? [],
           columns: entry.columns,
+          defaultFormat: entry.defaultFormat,
           pipeline: entry.pipeline,
           source: `manifest:${entry.site}/${entry.name}`,
           deprecated: entry.deprecated,
           replacedBy: entry.replacedBy,
           navigateBefore: entry.navigateBefore,
+          siteSession: entry.siteSession,
+          defaultWindowMode: entry.defaultWindowMode,
         };
         registerCommand(cmd);
-      } else if (entry.type === 'ts' && entry.modulePath) {
-        // TS adapters: register a lightweight stub.
+      } else if ((entry.type === 'ts' || entry.type === 'js') && entry.modulePath) {
+        // JS/TS adapters: register a lightweight stub.
         // The actual module is loaded lazily on first executeCommand().
         const strategy = parseStrategy(entry.strategy ?? 'cookie');
         const modulePath = path.resolve(clisDir, entry.modulePath);
@@ -152,6 +157,8 @@ async function loadFromManifest(manifestPath: string, clisDir: string): Promise<
           name: entry.name,
           aliases: entry.aliases,
           description: entry.description ?? '',
+          access: entry.access,
+          example: entry.example,
           domain: entry.domain,
           strategy,
           browser: entry.browser ?? true,
@@ -163,10 +170,13 @@ async function loadFromManifest(manifestPath: string, clisDir: string): Promise<
           }),
           args: entry.args ?? [],
           columns: entry.columns,
+          defaultFormat: entry.defaultFormat,
           source: modulePath,
           deprecated: entry.deprecated,
           replacedBy: entry.replacedBy,
           navigateBefore: entry.navigateBefore,
+          siteSession: entry.siteSession,
+          defaultWindowMode: entry.defaultWindowMode,
           _lazy: true,
           _modulePath: modulePath,
         };

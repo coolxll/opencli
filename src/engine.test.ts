@@ -125,6 +125,7 @@ cli({
           site: 'doubao-app',
           name: 'ask',
           description: 'ask',
+          access: 'read',
           domain: 'doubao-app',
           strategy: 'ui',
           browser: true,
@@ -138,6 +139,56 @@ cli({
       await discoverClis(distDir);
 
       expect(getRegistry().get('doubao-app/ask')?.supportsBrowserCdp).toBe(false);
+    } finally {
+      await fs.promises.rm(tempBuildRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('registers and lazy-loads JS adapter entries from the manifest', async () => {
+    const tempBuildRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'opencli-manifest-js-'));
+    const distDir = path.join(tempBuildRoot, 'dist');
+    const siteDir = path.join(distDir, 'manifest-js-site');
+    const commandPath = path.join(siteDir, 'hello.js');
+    const manifestPath = path.join(tempBuildRoot, 'cli-manifest.json');
+
+    try {
+      await fs.promises.mkdir(siteDir, { recursive: true });
+      await fs.promises.writeFile(commandPath, `
+import { cli, Strategy } from '${pathToFileURL(path.join(process.cwd(), 'src', 'registry.ts')).href}';
+cli({
+  site: 'manifest-js-site',
+  name: 'hello',
+  access: 'read',
+  description: 'hello command',
+  strategy: Strategy.LOCAL,
+  browser: false,
+  args: [],
+  columns: ['ok'],
+  func: async () => [{ ok: true }],
+});
+`);
+      await fs.promises.writeFile(manifestPath, JSON.stringify([
+        {
+          site: 'manifest-js-site',
+          name: 'hello',
+          description: 'hello command',
+          access: 'read',
+          strategy: 'local',
+          browser: false,
+          args: [],
+          columns: ['ok'],
+          type: 'js',
+          modulePath: 'manifest-js-site/hello.js',
+        },
+      ]));
+
+      await discoverClis(distDir);
+
+      const cmd = getRegistry().get('manifest-js-site/hello');
+      expect(cmd).toBeDefined();
+      expect(cmd?.access).toBe('read');
+      expect(cmd?.browser).toBe(false);
+      await expect(executeCommand(cmd!, {})).resolves.toEqual([{ ok: true }]);
     } finally {
       await fs.promises.rm(tempBuildRoot, { recursive: true, force: true });
     }

@@ -19,7 +19,7 @@ OpenCLI turns any website, Electron desktop app, or external CLI into a uniform 
 
 ```bash
 # npm global
-npm install -g @jackwener/opencli          # binary: opencli, requires Node >= 21
+npm install -g @jackwener/opencli          # binary: opencli, requires Node >= 20
 opencli doctor                              # run before browser-dependent work (see below)
 
 # From source

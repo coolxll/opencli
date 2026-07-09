@@ -33,7 +33,7 @@ describe('manifest helper rules', () => {
     return expect(loadManifestEntries(file, 'demo', async () => ({}))).resolves.toEqual([]);
   });
 
-  it('builds TS manifest entries from exported runtime commands', async () => {
+  it('builds manifest entries from exported runtime commands', async () => {
     const site = `manifest-hydrate-${Date.now()}`;
     const key = `${site}/dynamic`;
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'opencli-manifest-'));
@@ -86,19 +86,17 @@ describe('manifest helper rules', () => {
           default: '30',
         },
       ],
-      type: 'ts',
+      type: 'js',
       modulePath: `${site}/${site}.js`,
       navigateBefore: 'https://example.com/session',
-      deprecated: 'legacy command',
-      replacedBy: 'opencli demo new',
       supportsBrowserCdp: false,
     });
 
     getRegistry().delete(key);
   });
 
-  it('keeps literal domain and navigateBefore for TS adapters', async () => {
-    const file = path.join(process.cwd(), 'src', 'clis', 'xueqiu', 'fund-holdings.ts');
+  it('keeps literal domain and navigateBefore for JS adapters', async () => {
+    const file = path.join(process.cwd(), 'clis', 'xueqiu', 'fund-holdings.js');
     const entries = await loadManifestEntries(file, 'xueqiu');
 
     expect(entries[0]).toMatchObject({
@@ -106,7 +104,7 @@ describe('manifest helper rules', () => {
       name: 'fund-holdings',
       domain: 'danjuanfunds.com',
       navigateBefore: 'https://danjuanfunds.com/my-money',
-      type: 'ts',
+      type: 'js',
       modulePath: 'xueqiu/fund-holdings.js',
     });
   });
@@ -137,10 +135,8 @@ describe('manifest helper rules', () => {
       strategy: 'cookie',
       browser: true,
       args: [],
-      type: 'ts',
+      type: 'js',
       modulePath: `${site}/${site}.js`,
-      deprecated: 'legacy is deprecated',
-      replacedBy: 'opencli demo new',
       supportsBrowserCdp: true,
     });
 
@@ -159,6 +155,7 @@ describe('manifest helper rules', () => {
       command: cli({
         site,
         name: 'ask',
+        access: 'read',
         description: 'ask',
         domain: 'doubao-app',
         strategy: Strategy.UI,

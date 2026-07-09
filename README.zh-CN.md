@@ -103,6 +103,7 @@ npx skills add jackwener/opencli --skill opencli-browser
 npx skills add jackwener/opencli --skill opencli-browser-sitemap
 npx skills add jackwener/opencli --skill opencli-sitemap-author
 npx skills add jackwener/opencli --skill opencli-usage
+npx skills add jackwener/opencli --skill smart-search
 ```
 
 ### 选择哪个 skill
@@ -115,6 +116,7 @@ npx skills add jackwener/opencli --skill opencli-usage
 | **opencli-browser-sitemap** | 使用站点 sitemap 上下文来操作浏览器任务 | "用 sitemap 帮我少走弯路地操作这个网站" |
 | **opencli-sitemap-author** | 创建或更新面向浏览器 Agent 的站点 sitemap | "把刚发现的稳定流程记录到这个站点的 sitemap" |
 | **opencli-usage** | 所有命令和站点的快速参考 | "OpenCLI 有哪些 Twitter 相关的命令？" |
+| **smart-search** | 把搜索、查询、研究类请求路由到合适的 OpenCLI 信息源 | "帮我搜一下这个主题在社交/技术社区里的最新讨论" |
 
 ### 工作原理
 
@@ -135,6 +137,7 @@ Agent 在内部自动处理所有 `opencli browser` 命令——你只需用自�
 - [`skills/opencli-adapter-author/SKILL.md`](./skills/opencli-adapter-author/SKILL.md) — 给新站点写适配器，全流程
 - [`skills/opencli-autofix/SKILL.md`](./skills/opencli-autofix/SKILL.md) — 修复已有适配器
 - [`skills/opencli-usage/SKILL.md`](./skills/opencli-usage/SKILL.md) — 命令和站点参考
+- [`skills/smart-search/SKILL.md`](./skills/smart-search/SKILL.md) — 路由搜索和研究任务
 
 `browser` 可用命令包括：`open`、`state`、`click`、`type`、`fill`、`select`、`keys`、`wait`、`get`、`find`、`extract`、`frames`、`screenshot`、`scroll`、`back`、`eval`、`network`、`tab list`、`tab new`、`tab select`、`tab close`、`init`、`verify`、`close`。
 

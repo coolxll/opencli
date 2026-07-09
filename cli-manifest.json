@@ -3025,6 +3025,7 @@
     "access": "read",
     "strategy": "public",
     "browser": false,
+    "supportsBrowserCdp": false,
     "args": [
       {
         "name": "brand",
@@ -3062,6 +3063,7 @@
     "access": "read",
     "strategy": "public",
     "browser": false,
+    "supportsBrowserCdp": false,
     "args": [
       {
         "name": "series_id",
@@ -6431,6 +6433,7 @@
     "domain": "chatgpt.com",
     "strategy": "cookie",
     "browser": true,
+    "supportsBrowserCdp": true,
     "args": [
       {
         "name": "id",
@@ -6753,6 +6756,7 @@
     "domain": "chatgpt.com",
     "strategy": "cookie",
     "browser": true,
+    "supportsBrowserCdp": true,
     "args": [
       {
         "name": "file",
@@ -6786,6 +6790,7 @@
     "domain": "chatgpt.com",
     "strategy": "cookie",
     "browser": true,
+    "supportsBrowserCdp": true,
     "args": [
       {
         "name": "limit",
@@ -11025,6 +11030,7 @@
     "access": "read",
     "strategy": "public",
     "browser": false,
+    "supportsBrowserCdp": false,
     "args": [
       {
         "name": "series_id",
@@ -11065,6 +11071,7 @@
     "access": "read",
     "strategy": "public",
     "browser": false,
+    "supportsBrowserCdp": false,
     "args": [
       {
         "name": "series_id",
@@ -11103,6 +11110,7 @@
     "access": "read",
     "strategy": "public",
     "browser": false,
+    "supportsBrowserCdp": false,
     "args": [
       {
         "name": "series_id",
@@ -11128,6 +11136,7 @@
     "access": "read",
     "strategy": "public",
     "browser": false,
+    "supportsBrowserCdp": false,
     "args": [
       {
         "name": "keyword",
@@ -11168,6 +11177,7 @@
     "access": "read",
     "strategy": "public",
     "browser": false,
+    "supportsBrowserCdp": false,
     "args": [
       {
         "name": "series_id",
@@ -11195,6 +11205,7 @@
     "access": "read",
     "strategy": "public",
     "browser": false,
+    "supportsBrowserCdp": false,
     "args": [
       {
         "name": "series_id",
@@ -13926,6 +13937,173 @@
     "siteSession": "persistent"
   },
   {
+    "site": "feedly",
+    "name": "categories",
+    "description": "List Feedly categories with unread counts",
+    "access": "read",
+    "strategy": "local",
+    "browser": false,
+    "supportsBrowserCdp": false,
+    "args": [],
+    "columns": [
+      "id",
+      "label",
+      "unread"
+    ],
+    "type": "js",
+    "modulePath": "feedly/categories.js",
+    "sourceFile": "feedly/categories.js"
+  },
+  {
+    "site": "feedly",
+    "name": "counts",
+    "description": "List Feedly unread marker counts",
+    "access": "read",
+    "strategy": "local",
+    "browser": false,
+    "supportsBrowserCdp": false,
+    "args": [],
+    "columns": [
+      "id",
+      "count",
+      "updated"
+    ],
+    "type": "js",
+    "modulePath": "feedly/counts.js",
+    "sourceFile": "feedly/counts.js"
+  },
+  {
+    "site": "feedly",
+    "name": "mark-read",
+    "description": "Mark Feedly entries as read",
+    "access": "write",
+    "strategy": "local",
+    "browser": false,
+    "supportsBrowserCdp": false,
+    "args": [
+      {
+        "name": "ids",
+        "type": "str",
+        "required": true,
+        "valueRequired": true,
+        "help": "Comma-separated Feedly entry ids"
+      },
+      {
+        "name": "confirm",
+        "type": "str",
+        "required": true,
+        "valueRequired": true,
+        "help": "Must be MARK_READ to confirm the write",
+        "choices": [
+          "MARK_READ"
+        ]
+      }
+    ],
+    "columns": [
+      "status",
+      "count"
+    ],
+    "type": "js",
+    "modulePath": "feedly/mark-read.js",
+    "sourceFile": "feedly/mark-read.js"
+  },
+  {
+    "site": "feedly",
+    "name": "profile",
+    "description": "Verify Feedly token and show profile metadata",
+    "access": "read",
+    "strategy": "local",
+    "browser": false,
+    "supportsBrowserCdp": false,
+    "args": [],
+    "columns": [
+      "id",
+      "email",
+      "name",
+      "locale"
+    ],
+    "type": "js",
+    "modulePath": "feedly/profile.js",
+    "sourceFile": "feedly/profile.js"
+  },
+  {
+    "site": "feedly",
+    "name": "streams",
+    "description": "List global, category, and feed streams with unread counts",
+    "access": "read",
+    "strategy": "local",
+    "browser": false,
+    "supportsBrowserCdp": false,
+    "args": [],
+    "columns": [
+      "id",
+      "type",
+      "label",
+      "parent",
+      "unread"
+    ],
+    "type": "js",
+    "modulePath": "feedly/streams.js",
+    "sourceFile": "feedly/streams.js"
+  },
+  {
+    "site": "feedly",
+    "name": "subscriptions",
+    "description": "List Feedly feed subscriptions with unread counts",
+    "access": "read",
+    "strategy": "local",
+    "browser": false,
+    "supportsBrowserCdp": false,
+    "args": [],
+    "columns": [
+      "id",
+      "title",
+      "categories",
+      "website",
+      "unread"
+    ],
+    "type": "js",
+    "modulePath": "feedly/subscriptions.js",
+    "sourceFile": "feedly/subscriptions.js"
+  },
+  {
+    "site": "feedly",
+    "name": "unread",
+    "description": "List unread Feedly entries from a stream",
+    "access": "read",
+    "strategy": "local",
+    "browser": false,
+    "supportsBrowserCdp": false,
+    "args": [
+      {
+        "name": "limit",
+        "type": "int",
+        "default": 20,
+        "required": false,
+        "help": "Max unread entries to return (1-1000)"
+      },
+      {
+        "name": "stream-id",
+        "type": "str",
+        "required": false,
+        "help": "Feedly stream id; defaults to global.all"
+      }
+    ],
+    "columns": [
+      "id",
+      "title",
+      "author",
+      "published",
+      "origin_title",
+      "stream_id",
+      "url",
+      "summary"
+    ],
+    "type": "js",
+    "modulePath": "feedly/unread.js",
+    "sourceFile": "feedly/unread.js"
+  },
+  {
     "site": "flathub",
     "name": "app",
     "description": "Full Flathub appstream metadata for an app id (license, categories, latest release)",
@@ -14415,6 +14593,7 @@
     "domain": "gemini.google.com",
     "strategy": "cookie",
     "browser": true,
+    "supportsBrowserCdp": true,
     "args": [],
     "columns": [
       "model",
@@ -15002,6 +15181,7 @@
     "domain": "github.com",
     "strategy": "public",
     "browser": false,
+    "supportsBrowserCdp": false,
     "args": [
       {
         "name": "since",
@@ -16068,6 +16248,7 @@
     "access": "read",
     "strategy": "public",
     "browser": false,
+    "supportsBrowserCdp": false,
     "args": [
       {
         "name": "city",
@@ -16109,6 +16290,7 @@
     "access": "read",
     "strategy": "public",
     "browser": false,
+    "supportsBrowserCdp": false,
     "args": [
       {
         "name": "clue_id",
@@ -16743,6 +16925,7 @@
     "domain": "www.hltv.org",
     "strategy": "ui",
     "browser": true,
+    "supportsBrowserCdp": true,
     "args": [
       {
         "name": "event",
@@ -16785,6 +16968,7 @@
     "domain": "www.hltv.org",
     "strategy": "ui",
     "browser": true,
+    "supportsBrowserCdp": true,
     "args": [
       {
         "name": "match",
@@ -16822,6 +17006,7 @@
     "domain": "www.hltv.org",
     "strategy": "ui",
     "browser": true,
+    "supportsBrowserCdp": true,
     "args": [
       {
         "name": "match",
@@ -16859,6 +17044,7 @@
     "domain": "www.hltv.org",
     "strategy": "ui",
     "browser": true,
+    "supportsBrowserCdp": true,
     "args": [
       {
         "name": "playerA",
@@ -16987,6 +17173,7 @@
     "domain": "www.hltv.org",
     "strategy": "ui",
     "browser": true,
+    "supportsBrowserCdp": true,
     "args": [
       {
         "name": "player",
@@ -17073,6 +17260,7 @@
     "domain": "www.hltv.org",
     "strategy": "ui",
     "browser": true,
+    "supportsBrowserCdp": true,
     "args": [
       {
         "name": "player",
@@ -17166,6 +17354,7 @@
     "domain": "www.hltv.org",
     "strategy": "ui",
     "browser": true,
+    "supportsBrowserCdp": true,
     "args": [
       {
         "name": "player",
@@ -17252,6 +17441,7 @@
     "domain": "www.hltv.org",
     "strategy": "ui",
     "browser": true,
+    "supportsBrowserCdp": true,
     "args": [
       {
         "name": "player",
@@ -17289,6 +17479,7 @@
     "domain": "www.hltv.org",
     "strategy": "ui",
     "browser": true,
+    "supportsBrowserCdp": true,
     "args": [
       {
         "name": "playerA",
@@ -17388,6 +17579,7 @@
     "domain": "www.hltv.org",
     "strategy": "ui",
     "browser": true,
+    "supportsBrowserCdp": true,
     "args": [
       {
         "name": "player",
@@ -17488,6 +17680,7 @@
     "domain": "www.hltv.org",
     "strategy": "ui",
     "browser": true,
+    "supportsBrowserCdp": true,
     "args": [
       {
         "name": "query",
@@ -17528,6 +17721,7 @@
     "domain": "www.hltv.org",
     "strategy": "ui",
     "browser": true,
+    "supportsBrowserCdp": true,
     "args": [
       {
         "name": "team",
@@ -17563,6 +17757,7 @@
     "domain": "www.hltv.org",
     "strategy": "ui",
     "browser": true,
+    "supportsBrowserCdp": true,
     "args": [
       {
         "name": "team",
@@ -20396,6 +20591,7 @@
     "domain": "api.juejin.cn",
     "strategy": "public",
     "browser": false,
+    "supportsBrowserCdp": false,
     "args": [
       {
         "name": "category",
@@ -20435,6 +20631,7 @@
     "domain": "api.juejin.cn",
     "strategy": "public",
     "browser": false,
+    "supportsBrowserCdp": false,
     "args": [
       {
         "name": "limit",
@@ -24759,6 +24956,7 @@
     "domain": "app.mercury.com",
     "strategy": "ui",
     "browser": true,
+    "supportsBrowserCdp": true,
     "args": [],
     "columns": [
       "status",
@@ -24784,6 +24982,7 @@
     "domain": "app.mercury.com",
     "strategy": "ui",
     "browser": true,
+    "supportsBrowserCdp": true,
     "args": [
       {
         "name": "receipt",
@@ -24869,6 +25068,7 @@
     "example": "opencli mercury reimbursement-plan --receipt /tmp/receipt.png --amount 140.00 --currency CNY --date 2026-06-26 --merchant \"Example Merchant\" --category \"Marketing & Advertising\" --notes \"Example business purpose.\" -f json",
     "strategy": "local",
     "browser": false,
+    "supportsBrowserCdp": false,
     "args": [
       {
         "name": "receipt",
@@ -31491,6 +31691,7 @@
     "domain": "api.semanticscholar.org",
     "strategy": "public",
     "browser": false,
+    "supportsBrowserCdp": false,
     "args": [
       {
         "name": "id",
@@ -31536,6 +31737,7 @@
     "domain": "api.semanticscholar.org",
     "strategy": "public",
     "browser": false,
+    "supportsBrowserCdp": false,
     "args": [
       {
         "name": "id",
@@ -31569,6 +31771,7 @@
     "domain": "api.semanticscholar.org",
     "strategy": "public",
     "browser": false,
+    "supportsBrowserCdp": false,
     "args": [
       {
         "name": "id",
@@ -31607,6 +31810,7 @@
     "domain": "api.semanticscholar.org",
     "strategy": "public",
     "browser": false,
+    "supportsBrowserCdp": false,
     "args": [
       {
         "name": "query",
@@ -45899,6 +46103,7 @@
     "domain": "www.zhihu.com",
     "strategy": "cookie",
     "browser": true,
+    "supportsBrowserCdp": true,
     "args": [
       {
         "name": "user",
@@ -45936,6 +46141,7 @@
     "domain": "www.zhihu.com",
     "strategy": "cookie",
     "browser": true,
+    "supportsBrowserCdp": true,
     "args": [
       {
         "name": "user",
@@ -46071,6 +46277,7 @@
     "domain": "www.zhihu.com",
     "strategy": "cookie",
     "browser": true,
+    "supportsBrowserCdp": true,
     "args": [
       {
         "name": "user",
@@ -46241,6 +46448,7 @@
     "domain": "www.zhihu.com",
     "strategy": "cookie",
     "browser": true,
+    "supportsBrowserCdp": true,
     "args": [
       {
         "name": "user",
@@ -46274,6 +46482,7 @@
     "domain": "www.zhihu.com",
     "strategy": "cookie",
     "browser": true,
+    "supportsBrowserCdp": true,
     "args": [
       {
         "name": "user",
@@ -46311,6 +46520,7 @@
     "domain": "www.zhihu.com",
     "strategy": "cookie",
     "browser": true,
+    "supportsBrowserCdp": true,
     "args": [
       {
         "name": "user",
