@@ -997,7 +997,7 @@ describe('background tab isolation', () => {
     expect(create).toHaveBeenCalledWith({ windowId: 1, url: 'about:blank', active: true });
   });
 
-  it('releases owned sessions without closing the shared container', async () => {
+  it('closes the shared automation container after its final owned session', async () => {
     const { chrome } = createChromeMock();
     vi.stubGlobal('chrome', chrome);
 
@@ -1014,9 +1014,10 @@ describe('background tab isolation', () => {
     expect(mod.__test__.getSession(adapterKey('first'))).not.toBeNull();
     expect(mod.__test__.getSession(adapterKey('second'))).toBeNull();
 
+    chrome.tabs.update.mockClear();
     await mod.__test__.handleCommand({ id: 'close-first', action: 'close-window', session: 'first', surface: 'adapter' });
-    expect(chrome.tabs.update).toHaveBeenCalledWith(1, { url: 'about:blank' });
-    expect(chrome.windows.remove).not.toHaveBeenCalled();
+    expect(chrome.windows.remove).toHaveBeenCalledWith(1);
+    expect(chrome.tabs.update).not.toHaveBeenCalledWith(1, { url: 'about:blank' });
   });
 
   it('releases the current owned tab lease when tabs close targets it', async () => {
@@ -1036,8 +1037,8 @@ describe('background tab isolation', () => {
       ok: true,
       data: { closed: 'target-1' },
     }));
-    expect(chrome.tabs.update).toHaveBeenCalledWith(1, { url: 'about:blank', active: true });
-    expect(chrome.windows.remove).not.toHaveBeenCalled();
+    expect(chrome.windows.remove).toHaveBeenCalledWith(1);
+    expect(chrome.tabs.update).not.toHaveBeenCalledWith(1, { url: 'about:blank', active: true });
     expect(mod.__test__.getSession(adapterKey('twitter'))).toBeNull();
   });
 
@@ -1173,7 +1174,7 @@ describe('background tab isolation', () => {
     // SW restart and can dodge idle expiry indefinitely.
     expect(scheduledWhen).toBeLessThan(now + 15_000);
     expect(scheduledWhen).toBeGreaterThan(now + 1_000);
-    expect(mod.__test__.getSession(adapterKey('twitter')).idleDeadlineAt).toBeLessThan(now + 15_000);
+    expect(mod.__test__.getSession(adapterKey('twitter'))!.idleDeadlineAt).toBeLessThan(now + 15_000);
   });
 
   it('releases owned leases from the idle alarm path', async () => {
@@ -1182,17 +1183,18 @@ describe('background tab isolation', () => {
 
     const mod = await import('./background');
     await mod.__test__.resolveTabId(undefined, adapterKey('alarm'));
+    chrome.tabs.update.mockClear();
 
     const onAlarmListener = chrome.alarms.onAlarm.addListener.mock.calls[0][0];
     await onAlarmListener({ name: `opencli:lease-idle:${encodeURIComponent(adapterKey('alarm'))}` });
 
-    expect(chrome.tabs.update).toHaveBeenCalledWith(1, { url: 'about:blank' });
-    expect(chrome.windows.remove).not.toHaveBeenCalled();
+    expect(chrome.windows.remove).toHaveBeenCalledWith(1);
+    expect(chrome.tabs.update).not.toHaveBeenCalledWith(1, { url: 'about:blank' });
     expect(mod.__test__.getSession(adapterKey('alarm'))).toBeNull();
   });
 
-  it('reuses the placeholder tab left by an idle release', async () => {
-    const { chrome, tabs } = createChromeMock();
+  it('creates a fresh automation container after an idle release', async () => {
+    const { chrome } = createChromeMock();
     vi.stubGlobal('chrome', chrome);
 
     const mod = await import('./background');
@@ -1201,15 +1203,39 @@ describe('background tab isolation', () => {
     const onAlarmListener = chrome.alarms.onAlarm.addListener.mock.calls[0][0];
     await onAlarmListener({ name: `opencli:lease-idle:${encodeURIComponent(adapterKey('first'))}` });
 
-    expect(tabs[0].url).toBe('about:blank');
-    expect(chrome.windows.remove).not.toHaveBeenCalled();
+    expect(chrome.windows.remove).toHaveBeenCalledWith(1);
     chrome.windows.create.mockClear();
 
-    const reused = await mod.__test__.resolveTabId(undefined, adapterKey('next'), 'https://next.example');
+    await mod.__test__.resolveTabId(undefined, adapterKey('next'), 'https://next.example');
 
-    expect(reused).toBe(1);
-    expect(chrome.windows.create).not.toHaveBeenCalled();
+    expect(chrome.windows.create).toHaveBeenCalledTimes(1);
     expect(chrome.tabs.update).toHaveBeenCalledWith(1, { url: 'https://next.example' });
+  });
+
+  it('removes superseded tabs and owned groups when the final interactive lease closes', async () => {
+    const { chrome, tabs, groups } = createChromeMock();
+    vi.stubGlobal('chrome', chrome);
+
+    const mod = await import('./background');
+    await mod.__test__.resolveTabId(undefined, browserKey('cleanup'), 'https://first.example');
+    await mod.__test__.handleTabs(
+      { id: 'new-tab', action: 'tabs', op: 'new', session: 'cleanup', surface: 'browser', url: 'https://second.example' },
+      browserKey('cleanup'),
+    );
+
+    const ownedGroup = groups.find((group) => group.title === 'OpenCLI Browser');
+    expect(ownedGroup).toBeDefined();
+    const ownedIds = tabs
+      .filter((tab) => tab.groupId === ownedGroup!.id)
+      .map((tab) => tab.id);
+    expect(ownedIds).toHaveLength(2);
+
+    await mod.__test__.handleCommand({ id: 'close-browser', action: 'close-window', session: 'cleanup', surface: 'browser' });
+
+    for (const ownedId of ownedIds) expect(chrome.tabs.remove).toHaveBeenCalledWith(ownedId);
+    expect(chrome.windows.remove).not.toHaveBeenCalled();
+    expect(mod.__test__.getSession(browserKey('cleanup'))).toBeNull();
+    expect(mod.__test__.getInteractiveContainer()).toEqual({ windowId: null, groupId: null, groupIds: [] });
   });
 
   it('deduplicates concurrent automation container creation', async () => {
@@ -1985,8 +2011,8 @@ describe('background tab isolation', () => {
     // the canonical group is re-found in memory via the title layer instead.
     expect(finalRegistry.ownedContainers.interactive.groupId).toBeUndefined();
     expect(mod.__test__.getInteractiveContainer().groupId).toBe(200);
-    // The lease was released down the proper owned-placeholder path, not wiped.
-    expect(chrome.tabs.update).toHaveBeenCalledWith(1, { url: 'about:blank', active: true });
+    // The lease was released down the proper owned-container path, not wiped.
+    expect(chrome.windows.remove).toHaveBeenCalledWith(1);
     expect(mod.__test__.getSession(adapterKey('twitter'))).toBeNull();
   });
 

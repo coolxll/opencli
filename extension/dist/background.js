@@ -2286,8 +2286,9 @@ async function releaseLease(leaseKey, reason = "released") {
   if (session.owned) {
     const tabId = session.preferredTabId;
     if (tabId !== null) {
+      const role = getOwnedWindowRole(leaseKey);
       const hasOtherOwnedLease = [...automationSessions.entries()].some(
-        ([otherLease, otherSession]) => otherLease !== leaseKey && otherSession.owned && otherSession.windowId === session.windowId && otherSession.preferredTabId !== null
+        ([otherLease, otherSession]) => otherLease !== leaseKey && otherSession.owned && getOwnedWindowRole(otherLease) === role && otherSession.preferredTabId !== null
       );
       await safeDetach(tabId);
       evictTab(tabId);
@@ -2295,17 +2296,39 @@ async function releaseLease(leaseKey, reason = "released") {
         await chrome.tabs.remove(tabId).catch(() => {
         });
         console.log(`[opencli] Released owned tab lease ${tabId} (session=${session.session}, surface=${session.surface}, ${reason})`);
-      } else {
+      } else if (role === "automation") {
         try {
-          const tab = await chrome.tabs.update(tabId, { url: BLANK_PAGE, active: true });
-          const group = await ensureOwnedContainerGroup(getOwnedWindowRole(leaseKey), session.windowId, [tab.id ?? tabId]);
-          if (group) session.windowId = group.windowId;
-          console.log(`[opencli] Released owned tab lease ${tabId} as reusable placeholder (session=${session.session}, surface=${session.surface}, ${reason})`);
+          await chrome.windows.remove(session.windowId);
+          ownedContainers.automation.windowId = null;
+          ownedContainers.automation.groupId = null;
+          console.log(`[opencli] Closed automation container ${session.windowId} (session=${session.session}, ${reason})`);
         } catch {
           await chrome.tabs.remove(tabId).catch(() => {
           });
           console.log(`[opencli] Released owned tab lease ${tabId} (session=${session.session}, surface=${session.surface}, ${reason})`);
         }
+      } else {
+        const candidates = await collectOwnedGroupCandidates("interactive").catch(() => []);
+        const ownedTabIds = /* @__PURE__ */ new Set([tabId]);
+        const groupTabIds = /* @__PURE__ */ new Map();
+        for (const candidate of candidates) {
+          const tabs = await chrome.tabs.query({ groupId: candidate.id }).catch(() => []);
+          const ids = tabs.map((tab) => tab.id).filter((id) => id !== void 0);
+          groupTabIds.set(candidate.id, ids);
+          for (const id of ids) ownedTabIds.add(id);
+        }
+        const failedTabIds = /* @__PURE__ */ new Set();
+        for (const ownedTabId of ownedTabIds) {
+          if (ownedTabId !== tabId) await safeDetach(ownedTabId);
+          evictTab(ownedTabId);
+          await chrome.tabs.remove(ownedTabId).catch(() => failedTabIds.add(ownedTabId));
+        }
+        for (const [groupId, ids] of groupTabIds) {
+          if (ids.every((id) => !failedTabIds.has(id))) interactiveGroupLedger.delete(groupId);
+        }
+        ownedContainers.interactive.windowId = null;
+        ownedContainers.interactive.groupId = null;
+        console.log(`[opencli] Closed ${ownedTabIds.size} interactive owned tab(s) (session=${session.session}, ${reason})`);
       }
     } else {
       console.log(`[opencli] Released legacy owned window lease ${session.windowId} without closing container (session=${session.session}, surface=${session.surface}, ${reason})`);
