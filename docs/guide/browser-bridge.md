@@ -25,6 +25,30 @@ That's it! The daemon auto-starts when you run any browser command. No tokens, n
 opencli doctor            # Check extension + daemon connectivity
 ```
 
+## Optional Browser Auto-start
+
+The daemon starts automatically, but Chrome does not by default. If this machine
+uses a dedicated Chrome/Chromium profile for OpenCLI, configure a browser command
+to run only when no Browser Bridge profile is connected:
+
+```bash
+opencli browser autostart set "/path/to/chrome" -- \
+  --user-data-dir=/path/to/opencli-profile \
+  --remote-debugging-port=9222
+
+opencli browser autostart status
+opencli browser autostart disable
+```
+
+The executable and arguments are stored as separate values in
+`~/.opencli/browser-autostart.json`; OpenCLI does not invoke a shell. Browser
+flags beginning with `-` must follow the `--` separator. A
+`--remote-debugging-port` argument is optional for Browser Bridge operation, but
+when present OpenCLI automatically uses its `/json/version` endpoint to avoid
+launching a second copy that is already running. Auto-start is not attempted when
+another Browser Bridge profile is connected or when a specifically selected
+profile is offline.
+
 ## Tab Targeting
 
 Browser commands require an explicit `<session>` positional immediately after `browser`. Use the same session name for a multi-step flow, and use different names to isolate parallel work.

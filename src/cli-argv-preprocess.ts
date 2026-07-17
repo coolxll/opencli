@@ -16,6 +16,7 @@
  */
 const BROWSER_SUBCOMMAND_NAMES: ReadonlySet<string> = new Set([
   'analyze',
+  'autostart',
   'back',
   'bind',
   'check',

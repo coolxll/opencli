@@ -6,7 +6,11 @@ import { DEFAULT_DAEMON_PORT } from '../constants.js';
 import { BrowserConnectError } from '../errors.js';
 import { PKG_VERSION } from '../version.js';
 import { waitForBridgeReady } from './bridge-readiness.js';
+import { launchConfiguredBrowser } from './autostart.js';
 import { fetchDaemonStatus, getDaemonHealth, requestDaemonShutdown, type DaemonHealth, type DaemonStatus } from './daemon-transport.js';
+
+/** Give an already-open extension a chance to reconnect before launching another browser. */
+const BROWSER_AUTOSTART_GRACE_MS = 1_500;
 
 export interface DaemonLaunchSpec {
   binary: string;
@@ -75,6 +79,7 @@ export const daemonLifecycleHooks = {
   requestDaemonShutdown,
   spawnDaemonProcess,
   waitForDaemonStop,
+  launchConfiguredBrowser,
 };
 
 export async function restartDaemon(opts: { stopTimeoutMs?: number; startTimeoutMs?: number } = {}): Promise<DaemonRestartResult> {
@@ -98,6 +103,7 @@ export async function ensureBrowserBridgeReady(
 ): Promise<EnsureBrowserBridgeReadyResult> {
   const timeoutSeconds = opts.timeoutSeconds && opts.timeoutSeconds > 0 ? opts.timeoutSeconds : 10;
   const timeoutMs = timeoutSeconds * 1000;
+  const deadlineAt = Date.now() + timeoutMs;
   const verbose = opts.verbose ?? true;
   const contextId = opts.contextId;
 
@@ -106,6 +112,12 @@ export async function ensureBrowserBridgeReady(
   const isStale = !!health.status && (!daemonVersion || daemonVersion !== PKG_VERSION);
   let staleDaemonReplaced = false;
   let spawnedProcess: ChildProcess | null = null;
+  let observedHealth = health;
+  let autostartFailure: string | undefined;
+  // Only launch a browser when there are zero extension profiles. A selected
+  // profile being offline while another profile is connected must never open a
+  // surprise browser/profile or bypass the daemon's strict routing rules.
+  const mayAutostartBrowser = health.state === 'stopped' || health.state === 'no-extension';
 
   if (isStale) {
     const reason = daemonVersion
@@ -158,12 +170,41 @@ export async function ensureBrowserBridgeReady(
     process.stderr.write('   Make sure Chrome or Chromium is open and the OpenCLI extension is enabled.\n');
   }
 
-  const finalHealth = await waitForBridgeReady(getDaemonHealth, { timeoutMs, contextId });
+  if (mayAutostartBrowser) {
+    // If Chrome is already open, its extension may be in a reconnect backoff
+    // after the daemon was absent. Wait briefly before invoking the configured
+    // launcher; an optional CDP probe in browser-autostart.json adds another
+    // guard against opening a duplicate browser instance.
+    const graceMs = Math.min(BROWSER_AUTOSTART_GRACE_MS, Math.max(0, deadlineAt - Date.now()));
+    if (graceMs > 0) {
+      observedHealth = await waitForBridgeReady(getDaemonHealth, { timeoutMs: graceMs, contextId });
+    }
+    if (observedHealth.state === 'ready') return { health: observedHealth, spawnedProcess };
+    if (observedHealth.state === 'profile-required') {
+      throw browserConnectErrorFromHealth(observedHealth, contextId);
+    }
+
+    if (observedHealth.state === 'no-extension') {
+      const launch = await daemonLifecycleHooks.launchConfiguredBrowser();
+      if (launch.attempted && launch.launched) {
+        if (verbose && (process.env.OPENCLI_VERBOSE || process.stderr.isTTY)) {
+          process.stderr.write('🚀 Launching configured browser for Browser Bridge...\n');
+        }
+      } else if (launch.attempted && launch.reason === 'launch-failed') {
+        autostartFailure = launch.error;
+      }
+    }
+  }
+
+  const remainingMs = Math.max(0, deadlineAt - Date.now());
+  const finalHealth = remainingMs > 0
+    ? await waitForBridgeReady(getDaemonHealth, { timeoutMs: remainingMs, contextId })
+    : observedHealth;
   if (finalHealth.state === 'ready') return { health: finalHealth, spawnedProcess };
-  throw browserConnectErrorFromHealth(finalHealth, contextId);
+  throw browserConnectErrorFromHealth(finalHealth, contextId, autostartFailure);
 }
 
-function browserConnectErrorFromHealth(health: DaemonHealth, contextId?: string): BrowserConnectError {
+function browserConnectErrorFromHealth(health: DaemonHealth, contextId?: string, autostartFailure?: string): BrowserConnectError {
   if (health.state === 'profile-required') {
     return new BrowserConnectError(
       'Multiple Browser Bridge profiles are connected',
@@ -181,12 +222,16 @@ function browserConnectErrorFromHealth(health: DaemonHealth, contextId?: string)
     );
   }
   if (health.state === 'no-extension') {
+    const launchHint = autostartFailure
+      ? `\nConfigured browser auto-start failed: ${autostartFailure}\n` +
+        'Check it with: opencli browser autostart status'
+      : '';
     return new BrowserConnectError(
       'Browser Bridge extension not connected',
       'Make sure Chrome/Chromium is open and the OpenCLI extension is enabled.\n' +
       'If not installed:\n' +
       '  1. Download: https://github.com/jackwener/opencli/releases\n' +
-      '  2. Open chrome://extensions → Developer Mode → Load unpacked',
+      '  2. Open chrome://extensions → Developer Mode → Load unpacked' + launchHint,
       'extension-not-connected',
     );
   }

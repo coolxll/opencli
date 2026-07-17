@@ -42,6 +42,7 @@ import { fetchDaemonStatus } from './browser/daemon-transport.js';
 import { aliasForContextId, loadProfileConfig, profileRouteParams, renameProfile, resolveProfileSelection, setDefaultProfile, type ProfileSelection } from './browser/profile.js';
 import { formatDaemonVersion, isDaemonStale } from './browser/daemon-version.js';
 import { DEFAULT_BROWSER_CONNECT_TIMEOUT } from './browser/config.js';
+import { disableBrowserAutostart, loadBrowserAutostartState, saveBrowserAutostartConfig } from './browser/autostart.js';
 import type { BrowserDownloadWaitResult, IPage, ScreenshotOptions } from './types.js';
 import type { BrowserWindowMode } from './runtime.js';
 
@@ -1032,6 +1033,57 @@ Examples:
   $ opencli browser work unbind
 `);
   const originalBrowserDescription = browser.description();
+
+  const browserAutostart = browser
+    .command('autostart')
+    .description('Configure an optional browser command to launch when no Browser Bridge profile is connected');
+
+  browserAutostart
+    .command('status')
+    .description('Show the configured browser auto-start command')
+    .action(() => {
+      const state = loadBrowserAutostartState();
+      console.log(`Browser auto-start: ${state.config.enabled ? 'enabled' : 'disabled'}`);
+      console.log(`Config: ${state.path}`);
+      if (state.config.executable) console.log(`Executable: ${state.config.executable}`);
+      if (state.config.args.length > 0) console.log(`Arguments: ${JSON.stringify(state.config.args)}`);
+      if (state.config.probeUrl) console.log(`Running probe: ${state.config.probeUrl}`);
+      if (state.issue) {
+        console.error(`Invalid configuration: ${state.issue}`);
+        process.exitCode = EXIT_CODES.CONFIG_ERROR;
+      }
+    });
+
+  browserAutostart
+    .command('set')
+    .description('Set the browser executable and pass all following values directly as browser arguments')
+    .passThroughOptions()
+    .argument('<executable>', 'Browser executable path')
+    .argument('[args...]', 'Arguments passed directly to the browser executable')
+    .option('--probe-url <url>', 'Optional HTTP endpoint that indicates the configured browser is already running')
+    .action((executable: string, args: string[], opts: { probeUrl?: string }) => {
+      try {
+        // Commander normally consumes `--` when parsing process.argv, but
+        // embedded parseAsync callers can preserve it in a pass-through list.
+        const launchArgs = args[0] === '--' ? args.slice(1) : args;
+        const state = saveBrowserAutostartConfig({ executable, args: launchArgs, probeUrl: opts.probeUrl });
+        console.log(`Browser auto-start enabled: ${state.config.executable}`);
+        if (state.config.args.length > 0) console.log(`Arguments: ${JSON.stringify(state.config.args)}`);
+        if (state.config.probeUrl) console.log(`Running probe: ${state.config.probeUrl}`);
+        console.log(`Config: ${state.path}`);
+      } catch (err) {
+        console.error(`Error: ${getErrorMessage(err)}`);
+        process.exitCode = EXIT_CODES.CONFIG_ERROR;
+      }
+    });
+
+  browserAutostart
+    .command('disable')
+    .description('Disable browser auto-start while preserving the configured command')
+    .action(() => {
+      const state = disableBrowserAutostart();
+      console.log(`Browser auto-start disabled. Config preserved at ${state.path}`);
+    });
 
   /**
    * Resolve a `<target>` (numeric ref or CSS selector) via the unified resolver.
