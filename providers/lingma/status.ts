@@ -1,9 +1,10 @@
-import { cli, Strategy } from '../../registry.js';
+import { cli, Strategy } from '@jackwener/opencli/registry';
 import { lingmaRequiredEnv } from './shared.js';
 
 export const statusCommand = cli({
   site: 'lingma',
   name: 'status',
+  access: 'read',
   description: 'Check active CDP connection to Lingma Desktop',
   domain: 'localhost',
   strategy: Strategy.UI,

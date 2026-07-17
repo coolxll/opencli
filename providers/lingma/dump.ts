@@ -1,13 +1,14 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { cli, Strategy } from '../../registry.js';
-import type { IPage } from '../../types.js';
+import { cli, Strategy } from '@jackwener/opencli/registry';
+import type { IPage } from '@jackwener/opencli/types';
 import { lingmaRequiredEnv } from './shared.js';
 
 export const dumpCommand = cli({
   site: 'lingma',
   name: 'dump',
+  access: 'read',
   description: 'Dump the DOM and Accessibility tree of Lingma for reverse-engineering',
   domain: 'localhost',
   strategy: Strategy.UI,

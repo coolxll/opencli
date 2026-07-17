@@ -2,6 +2,12 @@
 
 **Mode**: 🔑 Local API · **Domain**: `cloud.feedly.com`
 
+## Install
+
+```bash
+opencli plugin install file:///absolute/path/to/opencli/providers/feedly
+```
+
 ## Commands
 
 | Command | Description |
@@ -41,3 +47,7 @@ Example:
   "refresh_token": "..."
 }
 ```
+
+The agent skill is shipped alongside the provider under
+`skills/opencli-feedly/` and can be installed or linked into the agent's skill
+directory independently of the OpenCLI core package.

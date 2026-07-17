@@ -6,7 +6,7 @@
 - Key outcomes since last checkpoint: 已确认 renderer 侧抓不到主回答网络流；HAR 证明真实回答流来自非 renderer 链路；进一步确认本地安装包含独立 `Lingma.exe`、`lingmacli.exe`、`node.exe` 和 `bin/extension/main.cjs`。
 
 ## What changed
-- Completed: 新增 `src/clis/lingma/` 下的 `shared.ts`、`status.ts`、`screenshot.ts`、`dump.ts`、`send.ts`、`read.ts`、`ask.ts`、`model.ts`、`new.ts`、`serve.ts`、`probe-network.ts`、`helpers.ts`；新增文档 `docs/adapters/desktop/lingma.md`、`src/clis/lingma/har-notes.md`；修复 `src/browser/dom-snapshot.ts` 与 `src/browser/dom-snapshot.test.ts` 以适配 Electron / VS Code 风格页面。
+- Completed: Lingma provider 已迁入 `providers/lingma/`，包含 `shared.ts`、`status.ts`、`screenshot.ts`、`dump.ts`、`send.ts`、`read.ts`、`ask.ts`、`model.ts`、`new.ts`、`serve.ts`、`probe-network.ts`、`helpers.ts` 与 provider 文档；通用 DOM snapshot 修复仍保留在 OpenCLI core。
 - In progress: 逆向 Lingma 原生 IDE 安装目录，确认扩展层、主进程层、`resources/bin` runtime 层之间的边界，并评估后续 hook 点。
 - De-scoped / canceled: 暂不改 `antigravity`；暂不继续依赖 renderer `fetch/xhr/ws` probe 作为 Lingma 主链路方案。
 
@@ -25,16 +25,16 @@
 - [ ] 梳理 `resources/bin/extension/main.cjs` 的启动链、连接模式与 `.info` 文件协议 — ASSISTANT — 立即执行
 - [ ] 分析 `lingmacli.exe` 是否参与主回答请求或仅承担辅助 CLI 能力 — ASSISTANT — 1-2 天
 - [ ] 评估是否能从本地 `pipe/ws` RPC 拿到比 DOM 更干净的回答结果 — ASSISTANT — 1-3 天
-- [ ] 如需要，补充一份 Lingma runtime 结构文档到 `src/clis/lingma` — ASSISTANT — 1 周内
+- [ ] 如需要，补充一份 Lingma runtime 结构文档到 `providers/lingma` — ASSISTANT — 1 周内
 
 ## Notes / links
-- `C:/Workspace/Personal/opencli/src/clis/lingma/helpers.ts`
-- `C:/Workspace/Personal/opencli/src/clis/lingma/send.ts`
-- `C:/Workspace/Personal/opencli/src/clis/lingma/ask.ts`
-- `C:/Workspace/Personal/opencli/src/clis/lingma/new.ts`
-- `C:/Workspace/Personal/opencli/src/clis/lingma/serve.ts`
-- `C:/Workspace/Personal/opencli/src/clis/lingma/probe-network.ts`
-- `C:/Workspace/Personal/opencli/src/clis/lingma/har-notes.md`
+- `C:/Workspace/Personal/opencli/providers/lingma/helpers.ts`
+- `C:/Workspace/Personal/opencli/providers/lingma/send.ts`
+- `C:/Workspace/Personal/opencli/providers/lingma/ask.ts`
+- `C:/Workspace/Personal/opencli/providers/lingma/new.ts`
+- `C:/Workspace/Personal/opencli/providers/lingma/serve.ts`
+- `C:/Workspace/Personal/opencli/providers/lingma/probe-network.ts`
+- `C:/Workspace/Personal/opencli/providers/lingma/har-notes.md`
 - `C:/Users/coolx/AppData/Local/Programs/Lingma/resources/app/extensions/aicoding-agent/package.json`
 - `C:/Users/coolx/AppData/Local/Programs/Lingma/resources/app/resources/bin/env.json`
 - `C:/Users/coolx/AppData/Local/Programs/Lingma/resources/app/resources/bin/extension/main.cjs`

@@ -266,7 +266,7 @@ Minimal working payload:
   "_meta": {
     "ai-coding/request-id": "ipc-1774432779539",
     "ai-coding/shell-type": "powershell",
-    "ai-coding/current-file-path": "C:/Workspace/Personal/opencli/src/clis/lingma/ipc-notes.md",
+    "ai-coding/current-file-path": "C:/Workspace/Personal/opencli/providers/lingma/ipc-notes.md",
     "ai-coding/enabled-mcp-servers": []
   }
 }

@@ -1,12 +1,13 @@
-import { cli, Strategy } from '../../registry.js';
-import { selectorError } from '../../errors.js';
-import type { IPage } from '../../types.js';
+import { cli, Strategy } from '@jackwener/opencli/registry';
+import { selectorError } from '@jackwener/opencli/errors';
+import type { IPage } from '@jackwener/opencli/types';
 import { lingmaRequiredEnv } from './shared.js';
 import { sendLingmaMessage } from './helpers.js';
 
 export const sendCommand = cli({
   site: 'lingma',
   name: 'send',
+  access: 'write',
   description: 'Send a message to the active Lingma sidebar conversation',
   domain: 'localhost',
   strategy: Strategy.UI,

@@ -1,6 +1,6 @@
-import { cli, Strategy } from '../../registry.js';
-import { CDPBridge } from '../../browser/cdp.js';
-import type { IPage } from '../../types.js';
+import { cli, Strategy } from '@jackwener/opencli/registry';
+import { CDPBridge } from '@jackwener/opencli/browser/cdp';
+import type { IPage } from '@jackwener/opencli/types';
 import { lingmaRequiredEnv } from './shared.js';
 import {
   countLingmaMessages,
@@ -168,6 +168,7 @@ function isInterestingUrl(url: string): boolean {
 export const probeNetworkCommand = cli({
   site: 'lingma',
   name: 'probe-network',
+  access: 'write',
   description: 'Send a Lingma prompt while probing fetch/XHR/WebSocket traffic for the active renderer',
   domain: 'localhost',
   strategy: Strategy.UI,

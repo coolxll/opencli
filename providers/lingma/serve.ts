@@ -12,8 +12,8 @@
  */
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { CDPBridge } from '../../browser/cdp.js';
-import type { IPage } from '../../types.js';
+import { CDPBridge } from '@jackwener/opencli/browser/cdp';
+import type { IPage } from '@jackwener/opencli/types';
 import {
   countLingmaMessages,
   ensureLingmaEditorMode,

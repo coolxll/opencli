@@ -1,6 +1,6 @@
 # Feedly content search API
 
-Use this reference only when maintaining or diagnosing `clis/feedly/search.js` and its helpers.
+Use this reference only when maintaining or diagnosing `providers/feedly/search.js` and its helpers.
 
 ## Endpoints and authentication
 

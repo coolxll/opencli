@@ -1,12 +1,13 @@
-import { cli, Strategy } from '../../registry.js';
-import { selectorError } from '../../errors.js';
-import type { IPage } from '../../types.js';
+import { cli, Strategy } from '@jackwener/opencli/registry';
+import { selectorError } from '@jackwener/opencli/errors';
+import type { IPage } from '@jackwener/opencli/types';
 import { lingmaRequiredEnv } from './shared.js';
 import { getLingmaCurrentModel, switchLingmaModel } from './helpers.js';
 
 export const modelCommand = cli({
   site: 'lingma',
   name: 'model',
+  access: 'write',
   description: 'Get or switch the active model in the Lingma Editor chat footer',
   domain: 'localhost',
   strategy: Strategy.UI,

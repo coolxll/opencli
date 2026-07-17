@@ -1,4 +1,4 @@
-import { CommandExecutionError } from '../../errors.js';
+import { CommandExecutionError } from '@jackwener/opencli/errors';
 import { initializeLingmaIpc, LingmaIpcClient, resolveLingmaPipePath } from './ipc-shared.js';
 
 function countItems(value: unknown): number {

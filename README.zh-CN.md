@@ -136,7 +136,6 @@ Agent 在内部自动处理所有 `opencli browser` 命令——你只需用自�
 - [`skills/opencli-sitemap-author/SKILL.md`](./skills/opencli-sitemap-author/SKILL.md) — 创建或更新站点 sitemap 知识
 - [`skills/opencli-adapter-author/SKILL.md`](./skills/opencli-adapter-author/SKILL.md) — 给新站点写适配器，全流程
 - [`skills/opencli-autofix/SKILL.md`](./skills/opencli-autofix/SKILL.md) — 修复已有适配器
-- [`skills/opencli-feedly/SKILL.md`](./skills/opencli-feedly/SKILL.md) — 搜索和管理已鉴权的 Feedly 账户
 - [`skills/opencli-usage/SKILL.md`](./skills/opencli-usage/SKILL.md) — 命令和站点参考
 - [`skills/smart-search/SKILL.md`](./skills/smart-search/SKILL.md) — 路由搜索和研究任务
 

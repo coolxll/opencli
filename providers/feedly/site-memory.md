@@ -53,6 +53,6 @@ Web 搜索页的 `options` URL 参数是 base64url JSON，可用于侦察 `layer
 
 ## 可参考的 adapter
 
-- `clis/feedly/search.js`
-- `clis/feedly/unread.js`
-- `clis/feedly/utils.js`
+- `providers/feedly/search.js`
+- `providers/feedly/unread.js`
+- `providers/feedly/utils.js`

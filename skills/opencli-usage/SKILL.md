@@ -56,7 +56,7 @@ Do not hard-code adapter lists — there are 100+ sites and the count moves ever
 
 Before falling back to raw `opencli browser` commands on high-change authenticated sites, check whether a site adapter already exposes the workflow. For example, ChatGPT web has higher-level commands for conversation reads and Deep Research result extraction; discover the current surface with `opencli chatgpt --help` or `opencli list -f json`.
 
-Feedly is also browser-free despite requiring account credentials. Use `opencli feedly --help` and load `opencli-feedly` for profile, unread, stream, search, and mark-read workflows. Store credentials in `~/.opencli/feedly.json` or point `FEEDLY_CONFIG_PATH` at a config file; never paste a Bearer token into a command.
+Optional providers installed through `opencli plugin install` appear in the same live registry. Always check `opencli list -f json` instead of assuming a provider is bundled with the core package.
 
 ## Universal flags (work on every adapter command)
 
@@ -156,7 +156,6 @@ opencli completion bash   # also: zsh, fish
 | Write a new adapter, or add a command to an existing site | `opencli-adapter-author` |
 | Fix a broken adapter after a command failure | `opencli-autofix` |
 | Route a search / lookup / research request to the right adapter | `smart-search` |
-| Search or manage an authenticated Feedly account | `opencli-feedly` |
 
 ## Commands that used to exist
 

@@ -1,5 +1,5 @@
-import type { IPage } from '../../types.js';
-import { CDPBridge } from '../../browser/cdp.js';
+import type { IPage } from '@jackwener/opencli/types';
+import { CDPBridge } from '@jackwener/opencli/browser/cdp';
 
 export interface LingmaMessage {
   Role: 'User' | 'Assistant' | 'System';

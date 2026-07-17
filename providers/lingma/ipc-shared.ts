@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import * as net from 'node:net';
 import { randomUUID } from 'node:crypto';
-import { CommandExecutionError, ConfigError } from '../../errors.js';
+import { CommandExecutionError, ConfigError } from '@jackwener/opencli/errors';
 
 const PIPE_DIR = '\\\\.\\pipe\\';
 const PIPE_PREFIX = 'lingma-';

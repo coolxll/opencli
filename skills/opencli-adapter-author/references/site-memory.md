@@ -9,7 +9,7 @@
 ```
 skills/opencli-adapter-author/references/site-memory/<site>.md
     — 公共种子。手写 + PR 审核进入。多 agent 共享的第一批起点。
-    — 已铺：eastmoney / xueqiu / bilibili / tonghuashun / feedly
+    — 已铺：eastmoney / xueqiu / bilibili / tonghuashun
 
 ~/.opencli/sites/<site>/
     — 本地累积。agent 跑 adapter 过程里自动写入，跨 session 复用。

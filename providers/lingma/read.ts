@@ -1,12 +1,13 @@
-import { cli, Strategy } from '../../registry.js';
-import { EmptyResultError } from '../../errors.js';
-import type { IPage } from '../../types.js';
+import { cli, Strategy } from '@jackwener/opencli/registry';
+import { EmptyResultError } from '@jackwener/opencli/errors';
+import type { IPage } from '@jackwener/opencli/types';
 import { lingmaRequiredEnv } from './shared.js';
 import { extractLingmaMessages } from './helpers.js';
 
 export const readCommand = cli({
   site: 'lingma',
   name: 'read',
+  access: 'read',
   description: 'Read the current Lingma conversation history',
   domain: 'localhost',
   strategy: Strategy.UI,

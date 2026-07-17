@@ -1,6 +1,6 @@
-import { cli, Strategy } from '../../registry.js';
-import { selectorError } from '../../errors.js';
-import type { IPage } from '../../types.js';
+import { cli, Strategy } from '@jackwener/opencli/registry';
+import { selectorError } from '@jackwener/opencli/errors';
+import type { IPage } from '@jackwener/opencli/types';
 import { lingmaRequiredEnv } from './shared.js';
 import {
   countLingmaMessages,
@@ -13,6 +13,7 @@ import {
 export const askCommand = cli({
   site: 'lingma',
   name: 'ask',
+  access: 'write',
   description: 'Send a prompt and wait for the Lingma response (send + wait + read)',
   domain: 'localhost',
   strategy: Strategy.UI,
