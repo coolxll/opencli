@@ -7,6 +7,7 @@
 | Command | Description |
 |---------|-------------|
 | `opencli feedly profile` | Verify token and show profile metadata |
+| `opencli feedly search <query>` | Search personal feeds and Feedly publication buckets |
 | `opencli feedly unread` | List unread entries |
 | `opencli feedly categories` | List categories with unread counts |
 | `opencli feedly subscriptions` | List subscriptions with unread counts |
@@ -18,6 +19,8 @@
 
 ```bash
 opencli feedly profile -f json
+opencli feedly search "test" --limit 40 -f json
+opencli feedly search "typescript" --scope tech --newer-than 2026-01-01 --older-than 2026-07-01
 opencli feedly unread --limit 20 -f json
 opencli feedly unread --stream-id "user/<id>/category/global.all" --limit 10
 opencli feedly streams

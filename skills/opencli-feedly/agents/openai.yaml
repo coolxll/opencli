@@ -1,0 +1,4 @@
+interface:
+  display_name: "OpenCLI Feedly"
+  short_description: "Search Feedly feeds and understand template layers"
+  default_prompt: "Use $opencli-feedly to search my Feedly sources and explain available filters."

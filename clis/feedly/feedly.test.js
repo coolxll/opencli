@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ArgumentError, CommandExecutionError, ConfigError } from '@jackwener/opencli/errors';
 import { getRegistry, Strategy } from '@jackwener/opencli/registry';
 import './profile.js';
+import './search.js';
 import './unread.js';
 import './categories.js';
 import './subscriptions.js';
@@ -13,6 +14,7 @@ import './streams.js';
 import './mark-read.js';
 import {
     FEEDLY_API_BASE,
+    FEEDLY_SEARCH_API_BASE,
     feedlyJson,
     getStreams,
     getUnreadEntries,
@@ -21,6 +23,7 @@ import {
     parseIdList,
     refreshFeedlyToken,
     resolveConfigPath,
+    searchFeedlyContents,
 } from './utils.js';
 
 function jsonResponse(status, data) {
@@ -223,6 +226,102 @@ describe('feedly unread pagination and stream joining', () => {
     });
 });
 
+describe('feedly content search', () => {
+    const config = {
+        path: 'memory',
+        raw: { access_token: 'access' },
+        accessToken: 'access',
+        refreshToken: '',
+        userId: 'user-1',
+        clientId: '',
+        clientSecret: '',
+        expiresAt: Date.now() + 600_000,
+    };
+
+    it('posts the captured Feedly search shape and normalizes results', async () => {
+        const fetchImpl = vi.fn(async (url, init) => {
+            const parsed = new URL(url);
+            if (parsed.pathname === '/v3/profile') {
+                return jsonResponse(200, { id: 'user-1' });
+            }
+
+            expect(parsed.origin).toBe('https://api.feedly.com');
+            expect(parsed.pathname).toBe('/v3/search/contents');
+            expect(parsed.searchParams.get('count')).toBe('25');
+            expect(parsed.searchParams.get('newerThan')).toBe(String(Date.parse('2026-01-01T00:00:00Z')));
+            expect(parsed.searchParams.get('olderThan')).toBe('1784188908875');
+            expect(parsed.searchParams.get('ct')).toBe('feedly.desktop');
+            expect(parsed.searchParams.get('cv')).toBe('31.0.3087');
+            expect(init.method).toBe('POST');
+            expect(init.headers.authorization).toBe('Bearer access');
+            expect(JSON.parse(init.body)).toEqual({
+                layers: [{
+                    parts: [{ text: 'test' }],
+                    type: 'matches',
+                    salience: 'about',
+                }],
+                source: {
+                    items: [
+                        { label: 'All Personal Feeds', type: 'stream', id: 'user/user-1/category/global.all' },
+                        { label: 'Business & Strategy', type: 'publicationBucket', id: 'byf:business-and-strategy', tier: 'tier1' },
+                        { label: 'Tech Blogs', type: 'publicationBucket', id: 'byf:tech', tier: 'tier1' },
+                    ],
+                },
+            });
+            return jsonResponse(200, {
+                items: [{
+                    id: 'entry-1',
+                    title: 'Test result',
+                    author: 'Author',
+                    published: 1_700_000_000_000,
+                    origin: { title: 'Example Feed', streamId: 'feed/example', htmlUrl: 'https://example.com' },
+                    summary: { content: '<p>Hello <b>world</b></p>' },
+                }],
+            });
+        });
+
+        const rows = await searchFeedlyContents({
+            config,
+            fetchImpl,
+            query: ' test ',
+            limit: 25,
+            newerThan: '2026-01-01T00:00:00Z',
+            olderThan: '1784188908875',
+        });
+
+        expect(rows).toEqual([expect.objectContaining({
+            id: 'entry-1',
+            title: 'Test result',
+            origin_title: 'Example Feed',
+            url: 'https://example.com',
+            summary: 'Hello world',
+        })]);
+        expect(fetchImpl).toHaveBeenCalledTimes(2);
+    });
+
+    it('can search a publication bucket without loading the profile', async () => {
+        const fetchImpl = vi.fn(async (_url, init) => {
+            expect(JSON.parse(init.body).source.items).toEqual([
+                { label: 'Tech Blogs', type: 'publicationBucket', id: 'byf:tech', tier: 'tier1' },
+            ]);
+            return jsonResponse(200, { items: [] });
+        });
+
+        await expect(searchFeedlyContents({ config, fetchImpl, query: 'node', scope: 'tech' })).resolves.toEqual([]);
+        expect(fetchImpl).toHaveBeenCalledTimes(1);
+    });
+
+    it('rejects empty queries and reversed date ranges', async () => {
+        await expect(searchFeedlyContents({ config, query: ' ' })).rejects.toThrow(ArgumentError);
+        await expect(searchFeedlyContents({
+            config,
+            query: 'test',
+            newerThan: '2026-07-01',
+            olderThan: '2026-01-01',
+        })).rejects.toThrow(ArgumentError);
+    });
+});
+
 describe('feedly mark-read command', () => {
     it('requires ids and confirmation before marking entries read', async () => {
         expect(() => parseIdList(' , ')).toThrow(ArgumentError);
@@ -259,7 +358,7 @@ describe('feedly mark-read command', () => {
 
 describe('feedly registry shape', () => {
     it('registers local browser-free commands', () => {
-        for (const name of ['profile', 'unread', 'categories', 'subscriptions', 'counts', 'streams', 'mark-read']) {
+        for (const name of ['profile', 'search', 'unread', 'categories', 'subscriptions', 'counts', 'streams', 'mark-read']) {
             const cmd = getRegistry().get(`feedly/${name}`);
             expect(cmd, name).toBeDefined();
             expect(cmd.strategy, name).toBe(Strategy.LOCAL);
@@ -269,10 +368,12 @@ describe('feedly registry shape', () => {
 
     it('uses stable id columns for round-trip workflows', () => {
         expect(getRegistry().get('feedly/unread').columns[0]).toBe('id');
+        expect(getRegistry().get('feedly/search').columns[0]).toBe('id');
         expect(getRegistry().get('feedly/streams').columns[0]).toBe('id');
     });
 
     it('uses the Feedly v3 API base', () => {
         expect(FEEDLY_API_BASE).toBe('https://cloud.feedly.com/v3');
+        expect(FEEDLY_SEARCH_API_BASE).toBe('https://api.feedly.com/v3');
     });
 });

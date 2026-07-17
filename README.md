@@ -150,6 +150,7 @@ The agent handles all the `opencli browser` commands internally — you just des
 - [`skills/opencli-sitemap-author/SKILL.md`](./skills/opencli-sitemap-author/SKILL.md) — create or update site sitemap knowledge
 - [`skills/opencli-adapter-author/SKILL.md`](./skills/opencli-adapter-author/SKILL.md) — write a new adapter end-to-end
 - [`skills/opencli-autofix/SKILL.md`](./skills/opencli-autofix/SKILL.md) — repair broken adapters
+- [`skills/opencli-feedly/SKILL.md`](./skills/opencli-feedly/SKILL.md) — search and manage an authenticated Feedly account
 - [`skills/opencli-usage/SKILL.md`](./skills/opencli-usage/SKILL.md) — command and site reference
 - [`skills/smart-search/SKILL.md`](./skills/smart-search/SKILL.md) — route search and research tasks
 

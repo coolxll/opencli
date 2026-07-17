@@ -14028,6 +14028,69 @@
   },
   {
     "site": "feedly",
+    "name": "search",
+    "description": "Search Feedly personal feeds and publication buckets",
+    "access": "read",
+    "strategy": "local",
+    "browser": false,
+    "supportsBrowserCdp": false,
+    "args": [
+      {
+        "name": "query",
+        "type": "string",
+        "required": true,
+        "positional": true,
+        "help": "Text to search for in Feedly contents"
+      },
+      {
+        "name": "limit",
+        "type": "int",
+        "default": 40,
+        "required": false,
+        "help": "Max search results to return (1-100)"
+      },
+      {
+        "name": "newer-than",
+        "type": "str",
+        "required": false,
+        "help": "Only return items newer than this epoch-ms timestamp or ISO date"
+      },
+      {
+        "name": "older-than",
+        "type": "str",
+        "required": false,
+        "help": "Only return items older than this epoch-ms timestamp or ISO date"
+      },
+      {
+        "name": "scope",
+        "type": "str",
+        "default": "all",
+        "required": false,
+        "help": "Sources to search: all, personal feeds, Business & Strategy, or Tech Blogs",
+        "choices": [
+          "all",
+          "personal",
+          "business",
+          "tech"
+        ]
+      }
+    ],
+    "columns": [
+      "id",
+      "title",
+      "author",
+      "published",
+      "origin_title",
+      "stream_id",
+      "url",
+      "summary"
+    ],
+    "type": "js",
+    "modulePath": "feedly/search.js",
+    "sourceFile": "feedly/search.js"
+  },
+  {
+    "site": "feedly",
     "name": "streams",
     "description": "List global, category, and feed streams with unread counts",
     "access": "read",

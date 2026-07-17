@@ -4,8 +4,26 @@ import { homedir } from 'node:os';
 import { ArgumentError, AuthRequiredError, CommandExecutionError, ConfigError } from '@jackwener/opencli/errors';
 
 export const FEEDLY_API_BASE = 'https://cloud.feedly.com/v3';
+export const FEEDLY_SEARCH_API_BASE = 'https://api.feedly.com/v3';
 export const DEFAULT_CONFIG_PATH = join(homedir(), '.opencli', 'feedly.json');
 export const DEFAULT_CLIENT_IDS = ['feedly', 'feedlydev'];
+
+const FEEDLY_SEARCH_CLIENT_TYPE = 'feedly.desktop';
+const FEEDLY_SEARCH_CLIENT_VERSION = '31.0.3087';
+const FEEDLY_SEARCH_SOURCES = {
+    business: {
+        label: 'Business & Strategy',
+        type: 'publicationBucket',
+        id: 'byf:business-and-strategy',
+        tier: 'tier1',
+    },
+    tech: {
+        label: 'Tech Blogs',
+        type: 'publicationBucket',
+        id: 'byf:tech',
+        tier: 'tier1',
+    },
+};
 
 const TOKEN_EXPIRY_SKEW_MS = 60_000;
 
@@ -41,6 +59,19 @@ export function normalizePositiveInt(value, fallback, label, max) {
         throw new ArgumentError(`feedly ${label} must be an integer between 1 and ${max}`);
     }
     return n;
+}
+
+export function normalizeSearchTimestamp(value, label) {
+    if (value === undefined || value === null || String(value).trim() === '') return undefined;
+    const raw = String(value).trim();
+    const numeric = Number(raw);
+    if (Number.isSafeInteger(numeric) && numeric > 0) return numeric;
+
+    const parsed = Date.parse(raw);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+        throw new ArgumentError(`feedly ${label} must be a positive epoch-millisecond timestamp or ISO date`);
+    }
+    return parsed;
 }
 
 export function parseIdList(value) {
@@ -273,7 +304,7 @@ function firstAlternateUrl(entry) {
 
 export function normalizeFeedlyEntry(entry) {
     if (!isRecord(entry) || typeof entry.id !== 'string' || !entry.id.trim()) {
-        throw new CommandExecutionError('Feedly unread returned an entry without a stable id.');
+        throw new CommandExecutionError('Feedly returned an entry without a stable id.');
     }
     const origin = isRecord(entry.origin) ? entry.origin : {};
     const summary = isRecord(entry.summary) ? entry.summary.content : isRecord(entry.content) ? entry.content.content : '';
@@ -287,6 +318,78 @@ export function normalizeFeedlyEntry(entry) {
         url: firstAlternateUrl(entry) || String(origin.htmlUrl || '').trim(),
         summary: stripHtml(summary).slice(0, 240),
     };
+}
+
+function searchSourceItems(scope, userId) {
+    const normalizedScope = String(scope || 'all').trim().toLowerCase();
+    if (!['all', 'personal', 'business', 'tech'].includes(normalizedScope)) {
+        throw new ArgumentError('feedly --scope must be one of: all, personal, business, tech');
+    }
+
+    const items = [];
+    if (normalizedScope === 'all' || normalizedScope === 'personal') {
+        items.push({
+            label: 'All Personal Feeds',
+            type: 'stream',
+            id: globalAllStreamId(userId),
+        });
+    }
+    if (normalizedScope === 'all' || normalizedScope === 'business') {
+        items.push(FEEDLY_SEARCH_SOURCES.business);
+    }
+    if (normalizedScope === 'all' || normalizedScope === 'tech') {
+        items.push(FEEDLY_SEARCH_SOURCES.tech);
+    }
+    return items;
+}
+
+export async function searchFeedlyContents({
+    query,
+    limit = 40,
+    newerThan,
+    olderThan,
+    scope = 'all',
+    ...opts
+} = {}) {
+    const text = String(query || '').trim();
+    if (!text) throw new ArgumentError('feedly search query must not be empty');
+
+    const count = normalizePositiveInt(limit, 40, '--limit', 100);
+    const newer = normalizeSearchTimestamp(newerThan, '--newer-than');
+    const older = normalizeSearchTimestamp(olderThan, '--older-than');
+    if (newer !== undefined && older !== undefined && newer >= older) {
+        throw new ArgumentError('feedly --newer-than must be earlier than --older-than');
+    }
+
+    const normalizedScope = String(scope || 'all').trim().toLowerCase();
+    let userId = '';
+    if (normalizedScope === 'all' || normalizedScope === 'personal') {
+        const profile = await getFeedlyProfile(opts);
+        userId = profile.id;
+    }
+
+    const data = await feedlyJson(`${FEEDLY_SEARCH_API_BASE}/search/contents`, {
+        ...opts,
+        method: 'POST',
+        query: {
+            count,
+            newerThan: newer,
+            olderThan: older,
+            ct: FEEDLY_SEARCH_CLIENT_TYPE,
+            cv: FEEDLY_SEARCH_CLIENT_VERSION,
+        },
+        body: {
+            layers: [{
+                parts: [{ text }],
+                type: 'matches',
+                salience: 'about',
+            }],
+            source: {
+                items: searchSourceItems(normalizedScope, userId),
+            },
+        },
+    });
+    return requireArrayPayload(data, 'items', 'search').map(normalizeFeedlyEntry);
 }
 
 export function globalAllStreamId(userId) {
