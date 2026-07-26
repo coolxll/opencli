@@ -180,6 +180,7 @@ export default defineConfig({
                 { text: 'YAML Adapter Guide (Deprecated)', link: '/developer/yaml-adapter' },
                 { text: 'TypeScript Adapter Guide', link: '/developer/ts-adapter' },
                 { text: 'AI Workflow', link: '/developer/ai-workflow' },
+                { text: 'Fork Integration Mainline', link: '/developer/fork-integration' },
               ],
             },
             {
@@ -251,6 +252,7 @@ export default defineConfig({
               text: '开发者指南',
               items: [
                 { text: '贡献指南', link: '/zh/developer/contributing' },
+                { text: 'Fork Integration 主线', link: '/zh/developer/fork-integration' },
               ],
             },
           ],
