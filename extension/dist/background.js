@@ -2303,6 +2303,28 @@ async function handleWaitDownload(cmd) {
     return errorResult(cmd.id, err);
   }
 }
+async function ensureOwnedInteractiveGroupIsEmpty(groupId) {
+  const groupedTabs = await chrome.tabs.query({ groupId }).catch(() => []);
+  const groupedTabIds = groupedTabs.map((tab) => tab.id).filter((id) => id !== void 0);
+  for (const tabId of groupedTabIds) {
+    await chrome.tabs.ungroup(tabId).catch((err) => {
+      console.warn(`[opencli] Failed to ungroup residual tab ${tabId} from group ${groupId}: ${err instanceof Error ? err.message : String(err)}`);
+    });
+  }
+  const remainingTabs = await chrome.tabs.query({ groupId }).catch(() => []);
+  if (remainingTabs.length > 0) {
+    console.warn(`[opencli] Owned interactive group ${groupId} still has ${remainingTabs.length} tab(s) after cleanup`);
+    return false;
+  }
+  try {
+    await chrome.tabGroups.get(groupId);
+  } catch {
+    interactiveGroupLedger.delete(groupId);
+    return true;
+  }
+  console.warn(`[opencli] Owned interactive group ${groupId} still exists after cleanup`);
+  return false;
+}
 async function releaseLease(leaseKey, reason = "released") {
   const session = automationSessions.get(leaseKey);
   if (!session) {
@@ -2347,14 +2369,14 @@ async function releaseLease(leaseKey, reason = "released") {
           groupTabIds.set(candidate.id, ids);
           for (const id of ids) ownedTabIds.add(id);
         }
-        const failedTabIds = /* @__PURE__ */ new Set();
         for (const ownedTabId of ownedTabIds) {
           if (ownedTabId !== tabId) await safeDetach(ownedTabId);
           evictTab(ownedTabId);
-          await chrome.tabs.remove(ownedTabId).catch(() => failedTabIds.add(ownedTabId));
+          await chrome.tabs.remove(ownedTabId).catch(() => {
+          });
         }
-        for (const [groupId, ids] of groupTabIds) {
-          if (ids.every((id) => !failedTabIds.has(id))) interactiveGroupLedger.delete(groupId);
+        for (const [groupId] of groupTabIds) {
+          await ensureOwnedInteractiveGroupIsEmpty(groupId);
         }
         ownedContainers.interactive.windowId = null;
         ownedContainers.interactive.groupId = null;

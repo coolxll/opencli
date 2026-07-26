@@ -1233,9 +1233,11 @@ describe('background tab isolation', () => {
     await mod.__test__.handleCommand({ id: 'close-browser', action: 'close-window', session: 'cleanup', surface: 'browser' });
 
     for (const ownedId of ownedIds) expect(chrome.tabs.remove).toHaveBeenCalledWith(ownedId);
+    expect(chrome.tabs.ungroup).toHaveBeenCalled();
     expect(chrome.windows.remove).not.toHaveBeenCalled();
     expect(mod.__test__.getSession(browserKey('cleanup'))).toBeNull();
     expect(mod.__test__.getInteractiveContainer()).toEqual({ windowId: null, groupId: null, groupIds: [] });
+    expect(groups).toEqual([]);
   });
 
   it('deduplicates concurrent automation container creation', async () => {

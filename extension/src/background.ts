@@ -2067,6 +2067,37 @@ async function handleWaitDownload(cmd: Command): Promise<Result> {
   }
 }
 
+async function ensureOwnedInteractiveGroupIsEmpty(groupId: number): Promise<boolean> {
+  const groupedTabs = await chrome.tabs.query({ groupId }).catch(() => []);
+  const groupedTabIds = groupedTabs
+    .map((tab) => tab.id)
+    .filter((id): id is number => id !== undefined);
+
+  // A failed tab close must not leave the OpenCLI group attached to a live tab.
+  // Ungroup the remainder so user-visible tabs survive without the owned group.
+  for (const tabId of groupedTabIds) {
+    await chrome.tabs.ungroup(tabId).catch((err) => {
+      console.warn(`[opencli] Failed to ungroup residual tab ${tabId} from group ${groupId}: ${err instanceof Error ? err.message : String(err)}`);
+    });
+  }
+
+  const remainingTabs = await chrome.tabs.query({ groupId }).catch(() => []);
+  if (remainingTabs.length > 0) {
+    console.warn(`[opencli] Owned interactive group ${groupId} still has ${remainingTabs.length} tab(s) after cleanup`);
+    return false;
+  }
+
+  try {
+    await chrome.tabGroups.get(groupId);
+  } catch {
+    interactiveGroupLedger.delete(groupId);
+    return true;
+  }
+
+  console.warn(`[opencli] Owned interactive group ${groupId} still exists after cleanup`);
+  return false;
+}
+
 async function releaseLease(leaseKey: string, reason: string = 'released'): Promise<void> {
   const session = automationSessions.get(leaseKey);
   if (!session) {
@@ -2124,14 +2155,13 @@ async function releaseLease(leaseKey: string, reason: string = 'released'): Prom
           for (const id of ids) ownedTabIds.add(id);
         }
 
-        const failedTabIds = new Set<number>();
         for (const ownedTabId of ownedTabIds) {
           if (ownedTabId !== tabId) await safeDetach(ownedTabId);
           identity.evictTab(ownedTabId);
-          await chrome.tabs.remove(ownedTabId).catch(() => failedTabIds.add(ownedTabId));
+          await chrome.tabs.remove(ownedTabId).catch(() => {});
         }
-        for (const [groupId, ids] of groupTabIds) {
-          if (ids.every((id) => !failedTabIds.has(id))) interactiveGroupLedger.delete(groupId);
+        for (const [groupId] of groupTabIds) {
+          await ensureOwnedInteractiveGroupIsEmpty(groupId);
         }
         ownedContainers.interactive.windowId = null;
         ownedContainers.interactive.groupId = null;
