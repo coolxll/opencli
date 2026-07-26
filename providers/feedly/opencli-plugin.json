@@ -1,0 +1,6 @@
+{
+  "name": "feedly",
+  "version": "0.1.0",
+  "opencli": ">=1.8.0",
+  "description": "Feedly account, unread stream, search, and marker commands"
+}

@@ -1,0 +1,6 @@
+{
+  "name": "lingma",
+  "version": "0.1.0",
+  "opencli": ">=1.8.0",
+  "description": "Lingma Desktop CDP and native IPC commands"
+}

@@ -119,6 +119,7 @@ function toManifestEntry(cmd: CliCommand, modulePath: string, sourceFile?: strin
     domain: cmd.domain,
     strategy: (cmd.strategy ?? 'public').toString().toLowerCase(),
     browser: cmd.browser ?? true,
+    supportsBrowserCdp: cmd.supportsBrowserCdp,
     args: toManifestArgs(cmd.args),
     columns: cmd.columns,
     defaultFormat: cmd.defaultFormat,

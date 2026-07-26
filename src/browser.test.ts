@@ -1,4 +1,4 @@
-import { afterEach, describe, it, expect, vi } from 'vitest';
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import { BrowserBridge, generateStealthJs } from './browser/index.js';
 import { extractTabEntries, diffTabIndexes, appendLimited } from './browser/tabs.js';
 import { withTimeoutMs } from './runtime.js';
@@ -6,6 +6,14 @@ import { __test__ as cdpTest } from './browser/cdp.js';
 import { classifyBrowserError } from './browser/errors.js';
 import * as daemonTransport from './browser/daemon-transport.js';
 import * as daemonLifecycle from './browser/daemon-lifecycle.js';
+
+beforeEach(() => {
+  // Unit tests must never launch a developer's configured local browser.
+  vi.spyOn(daemonLifecycle.daemonLifecycleHooks, 'launchConfiguredBrowser').mockResolvedValue({
+    attempted: false,
+    reason: 'disabled',
+  });
+});
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -168,6 +176,58 @@ describe('BrowserBridge state', () => {
     const bridge = new BrowserBridge();
 
     await expect(bridge.connect({ timeout: 0.1 })).rejects.toThrow('Browser Bridge extension not connected');
+  });
+
+  it('launches the configured browser once when zero extension profiles are connected', async () => {
+    const { PKG_VERSION } = await import('./version.js');
+    vi.spyOn(daemonTransport, 'getDaemonHealth').mockResolvedValue({
+      state: 'no-extension',
+      status: {
+        ok: true,
+        pid: 123,
+        uptime: 1,
+        daemonVersion: PKG_VERSION,
+        extensionConnected: false,
+        profiles: [],
+        pending: 0,
+        memoryMB: 0,
+        port: 19825,
+      },
+    });
+    const launchSpy = vi.spyOn(daemonLifecycle.daemonLifecycleHooks, 'launchConfiguredBrowser').mockResolvedValue({
+      attempted: true,
+      launched: true,
+      config: { version: 1, enabled: true, executable: '/browser', args: [] },
+    });
+
+    const bridge = new BrowserBridge();
+    await expect(bridge.connect({ timeout: 0.1 })).rejects.toThrow('Browser Bridge extension not connected');
+    expect(launchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not auto-launch a browser when an explicitly selected profile is disconnected', async () => {
+    const { PKG_VERSION } = await import('./version.js');
+    vi.spyOn(daemonTransport, 'getDaemonHealth').mockResolvedValue({
+      state: 'profile-disconnected',
+      status: {
+        ok: true,
+        pid: 123,
+        uptime: 1,
+        daemonVersion: PKG_VERSION,
+        extensionConnected: false,
+        contextId: 'work',
+        profileDisconnected: true,
+        profiles: [{ contextId: 'personal', extensionConnected: true, pending: 0 }],
+        pending: 0,
+        memoryMB: 0,
+        port: 19825,
+      },
+    });
+    const launchSpy = vi.mocked(daemonLifecycle.daemonLifecycleHooks.launchConfiguredBrowser);
+
+    const bridge = new BrowserBridge();
+    await expect(bridge.connect({ timeout: 0.1, contextId: 'work' })).rejects.toThrow('Browser profile "work" is not connected');
+    expect(launchSpy).not.toHaveBeenCalled();
   });
 
   it('attempts stale daemon replacement when daemonVersion is missing', async () => {

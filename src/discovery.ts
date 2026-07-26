@@ -12,7 +12,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { type InternalCliCommand, Strategy, registerCommand } from './registry.js';
+import { type CliCommand, type InternalCliCommand, type Arg, Strategy, deriveSupportsBrowserCdp, registerCommand } from './registry.js';
 import { getErrorMessage } from './errors.js';
 import { log } from './logger.js';
 import type { ManifestEntry } from './manifest-types.js';
@@ -116,31 +116,72 @@ async function loadFromManifest(manifestPath: string, clisDir: string): Promise<
     const raw = await fs.promises.readFile(manifestPath, 'utf-8');
     const manifest = JSON.parse(raw) as ManifestEntry[];
     for (const entry of manifest) {
-      if (!entry.modulePath) continue;
-      const modulePath = path.resolve(clisDir, entry.modulePath);
-      const cmd: InternalCliCommand = {
-        site: entry.site,
-        name: entry.name,
-        aliases: entry.aliases,
-        description: entry.description ?? '',
-        access: entry.access,
-        example: entry.example,
-        domain: entry.domain,
-        strategy: parseStrategy(entry.strategy),
-        browser: entry.browser,
-        args: entry.args ?? [],
-        columns: entry.columns,
-        defaultFormat: entry.defaultFormat,
-        pipeline: entry.pipeline,
-        source: entry.sourceFile ? path.resolve(clisDir, entry.sourceFile) : modulePath,
-        navigateBefore: entry.navigateBefore,
-        siteSession: entry.siteSession,
-        defaultWindowMode: entry.defaultWindowMode,
-        _lazy: true,
-        _modulePath: modulePath,
-      };
-      // normalizeCommand inside registerCommand handles strategy → browser/navigateBefore
-      registerCommand(cmd);
+      if (entry.type === 'yaml') {
+        // YAML pipelines fully inlined in manifest — register directly
+        const strategy = parseStrategy(entry.strategy);
+        const cmd: CliCommand = {
+          site: entry.site,
+          name: entry.name,
+          aliases: entry.aliases,
+          description: entry.description ?? '',
+          access: entry.access,
+          example: entry.example,
+          domain: entry.domain,
+          strategy,
+          browser: entry.browser,
+          supportsBrowserCdp: deriveSupportsBrowserCdp({
+            browser: entry.browser,
+            strategy,
+            domain: entry.domain,
+            supportsBrowserCdp: entry.supportsBrowserCdp,
+          }),
+          args: entry.args ?? [],
+          columns: entry.columns,
+          defaultFormat: entry.defaultFormat,
+          pipeline: entry.pipeline,
+          source: `manifest:${entry.site}/${entry.name}`,
+          deprecated: entry.deprecated,
+          replacedBy: entry.replacedBy,
+          navigateBefore: entry.navigateBefore,
+          siteSession: entry.siteSession,
+          defaultWindowMode: entry.defaultWindowMode,
+        };
+        registerCommand(cmd);
+      } else if ((entry.type === 'ts' || entry.type === 'js') && entry.modulePath) {
+        // JS/TS adapters: register a lightweight stub.
+        // The actual module is loaded lazily on first executeCommand().
+        const strategy = parseStrategy(entry.strategy ?? 'cookie');
+        const modulePath = path.resolve(clisDir, entry.modulePath);
+        const cmd: InternalCliCommand = {
+          site: entry.site,
+          name: entry.name,
+          aliases: entry.aliases,
+          description: entry.description ?? '',
+          access: entry.access,
+          example: entry.example,
+          domain: entry.domain,
+          strategy,
+          browser: entry.browser ?? true,
+          supportsBrowserCdp: deriveSupportsBrowserCdp({
+            browser: entry.browser ?? true,
+            strategy,
+            domain: entry.domain,
+            supportsBrowserCdp: entry.supportsBrowserCdp,
+          }),
+          args: entry.args ?? [],
+          columns: entry.columns,
+          defaultFormat: entry.defaultFormat,
+          source: modulePath,
+          deprecated: entry.deprecated,
+          replacedBy: entry.replacedBy,
+          navigateBefore: entry.navigateBefore,
+          siteSession: entry.siteSession,
+          defaultWindowMode: entry.defaultWindowMode,
+          _lazy: true,
+          _modulePath: modulePath,
+        };
+        registerCommand(cmd);
+      }
     }
     return true;
   } catch (err) {

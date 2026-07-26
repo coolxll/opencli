@@ -14,6 +14,8 @@ import { findPackageRoot, getBuiltEntryCandidates } from './package-paths.js';
 import { type CliCommand, fullName, getRegistry, strategyLabel } from './registry.js';
 import { serializeCommand, formatArgSummary } from './serialization.js';
 import { render as renderOutput } from './output.js';
+import { getBrowserFactory, browserSession } from './runtime.js';
+import { addBrowserEnvOverrideOptions, runWithBrowserEnvOptions } from './browserEnvOptions.js';
 import { PKG_VERSION } from './version.js';
 import { printCompletionScript } from './completion.js';
 import { loadExternalClis, executeExternalCli, installExternalCli, registerExternalCli, isBinaryInstalled, formatExternalCliLabel } from './external.js';
@@ -40,6 +42,7 @@ import { fetchDaemonStatus } from './browser/daemon-transport.js';
 import { aliasForContextId, loadProfileConfig, profileRouteParams, renameProfile, resolveProfileSelection, setDefaultProfile, type ProfileSelection } from './browser/profile.js';
 import { formatDaemonVersion, isDaemonStale } from './browser/daemon-version.js';
 import { DEFAULT_BROWSER_CONNECT_TIMEOUT } from './browser/config.js';
+import { disableBrowserAutostart, loadBrowserAutostartState, saveBrowserAutostartConfig } from './browser/autostart.js';
 import type { BrowserDownloadWaitResult, IPage, ScreenshotOptions } from './types.js';
 import type { BrowserWindowMode } from './runtime.js';
 
@@ -844,6 +847,39 @@ export function createProgram(BUILTIN_CLIS: string, USER_CLIS: string): Command 
       });
     });
 
+  addBrowserEnvOverrideOptions(
+    program
+    .command('explore')
+    .alias('probe')
+    .description('Explore a website: discover APIs, stores, and recommend strategies')
+    .argument('<url>')
+    .option('--site <name>')
+    .option('--goal <text>')
+    .option('--wait <s>', '', '3')
+    .option('--auto', 'Enable interactive fuzzing')
+    .option('--click <labels>', 'Comma-separated labels to click before fuzzing'),
+    { allowBrowserCdp: true },
+  )
+    .action(async (url, opts) => {
+      await runWithBrowserEnvOptions(opts, async () => {
+        const { exploreUrl, renderExploreSummary } = await import('./explore.js');
+        const clickLabels = opts.click
+          ? opts.click.split(',').map((s: string) => s.trim())
+          : undefined;
+        const workspace = `explore:${inferHost(url, opts.site)}`;
+        const result = await exploreUrl(url, {
+          BrowserFactory: getBrowserFactory(),
+          site: opts.site,
+          goal: opts.goal,
+          waitSeconds: parseFloat(opts.wait),
+          auto: opts.auto,
+          clickLabels,
+          workspace,
+        });
+        console.log(renderExploreSummary(result));
+      }, { allowBrowserCdp: true });
+    });
+
   skillsCmd
     .command('read')
     .description("Print an opencli-* skill's SKILL.md or reference file")
@@ -893,7 +929,85 @@ export function createProgram(BUILTIN_CLIS: string, USER_CLIS: string): Command 
       if (opts.strict && !report.ok) process.exitCode = EXIT_CODES.GENERIC_ERROR;
     });
 
-  // ── Built-in: browser (browser control for Claude Code skill) ───────────────
+  addBrowserEnvOverrideOptions(
+    program
+    .command('generate')
+    .description('One-shot: explore → synthesize → register')
+    .argument('<url>')
+    .option('--goal <text>')
+    .option('--site <name>'),
+    { allowBrowserCdp: true },
+  )
+    .action(async (url, opts) => {
+      await runWithBrowserEnvOptions(opts, async () => {
+        const { generateCliFromUrl, renderGenerateSummary } = await import('./generate.js');
+        const workspace = `generate:${inferHost(url, opts.site)}`;
+        const r = await generateCliFromUrl({
+          url,
+          BrowserFactory: getBrowserFactory(),
+          goal: opts.goal,
+          site: opts.site,
+          workspace,
+        });
+        console.log(renderGenerateSummary(r));
+        process.exitCode = r.ok ? EXIT_CODES.SUCCESS : EXIT_CODES.GENERIC_ERROR;
+      }, { allowBrowserCdp: true });
+    });
+
+  // ── Built-in: record ─────────────────────────────────────────────────────
+
+  addBrowserEnvOverrideOptions(
+    program
+    .command('record')
+    .description('Record API calls from a live browser session → generate YAML candidates')
+    .argument('<url>', 'URL to open and record')
+    .option('--site <name>', 'Site name (inferred from URL if omitted)')
+    .option('--out <dir>', 'Output directory for candidates')
+    .option('--poll <ms>', 'Poll interval in milliseconds', '2000')
+    .option('--timeout <ms>', 'Auto-stop after N milliseconds (default: 60000)', '60000'),
+    { allowBrowserCdp: true },
+  )
+    .action(async (url, opts) => {
+      await runWithBrowserEnvOptions(opts, async () => {
+        const { recordSession, renderRecordSummary } = await import('./record.js');
+        const result = await recordSession({
+          BrowserFactory: getBrowserFactory(),
+          url,
+          site: opts.site,
+          outDir: opts.out,
+          pollMs: parseInt(opts.poll, 10),
+          timeoutMs: parseInt(opts.timeout, 10),
+        });
+        console.log(renderRecordSummary(result));
+        process.exitCode = result.candidateCount > 0 ? EXIT_CODES.SUCCESS : EXIT_CODES.EMPTY_RESULT;
+      }, { allowBrowserCdp: true });
+    });
+
+  addBrowserEnvOverrideOptions(
+    program
+    .command('cascade')
+    .description('Strategy cascade: find simplest working strategy')
+    .argument('<url>')
+    .option('--site <name>'),
+    { allowBrowserCdp: true },
+  )
+    .action(async (url, opts) => {
+      await runWithBrowserEnvOptions(opts, async () => {
+        const { cascadeProbe, renderCascadeResult } = await import('./cascade.js');
+        const workspace = `cascade:${inferHost(url, opts.site)}`;
+        const result = await browserSession(getBrowserFactory(), async (page) => {
+          try {
+            const siteUrl = new URL(url);
+            await page.goto(`${siteUrl.protocol}//${siteUrl.host}`);
+            await page.wait(2);
+          } catch {}
+          return cascadeProbe(page, url);
+        }, { workspace });
+        console.log(renderCascadeResult(result));
+      }, { allowBrowserCdp: true });
+    });
+
+  // ── Built-in: operate (browser control for Claude Code skill) ───────────────
   //
   // Make websites accessible for AI agents.
   // All commands wrapped in browserAction() for consistent error handling.
@@ -919,6 +1033,57 @@ Examples:
   $ opencli browser work unbind
 `);
   const originalBrowserDescription = browser.description();
+
+  const browserAutostart = browser
+    .command('autostart')
+    .description('Configure an optional browser command to launch when no Browser Bridge profile is connected');
+
+  browserAutostart
+    .command('status')
+    .description('Show the configured browser auto-start command')
+    .action(() => {
+      const state = loadBrowserAutostartState();
+      console.log(`Browser auto-start: ${state.config.enabled ? 'enabled' : 'disabled'}`);
+      console.log(`Config: ${state.path}`);
+      if (state.config.executable) console.log(`Executable: ${state.config.executable}`);
+      if (state.config.args.length > 0) console.log(`Arguments: ${JSON.stringify(state.config.args)}`);
+      if (state.config.probeUrl) console.log(`Running probe: ${state.config.probeUrl}`);
+      if (state.issue) {
+        console.error(`Invalid configuration: ${state.issue}`);
+        process.exitCode = EXIT_CODES.CONFIG_ERROR;
+      }
+    });
+
+  browserAutostart
+    .command('set')
+    .description('Set the browser executable and pass all following values directly as browser arguments')
+    .passThroughOptions()
+    .argument('<executable>', 'Browser executable path')
+    .argument('[args...]', 'Arguments passed directly to the browser executable')
+    .option('--probe-url <url>', 'Optional HTTP endpoint that indicates the configured browser is already running')
+    .action((executable: string, args: string[], opts: { probeUrl?: string }) => {
+      try {
+        // Commander normally consumes `--` when parsing process.argv, but
+        // embedded parseAsync callers can preserve it in a pass-through list.
+        const launchArgs = args[0] === '--' ? args.slice(1) : args;
+        const state = saveBrowserAutostartConfig({ executable, args: launchArgs, probeUrl: opts.probeUrl });
+        console.log(`Browser auto-start enabled: ${state.config.executable}`);
+        if (state.config.args.length > 0) console.log(`Arguments: ${JSON.stringify(state.config.args)}`);
+        if (state.config.probeUrl) console.log(`Running probe: ${state.config.probeUrl}`);
+        console.log(`Config: ${state.path}`);
+      } catch (err) {
+        console.error(`Error: ${getErrorMessage(err)}`);
+        process.exitCode = EXIT_CODES.CONFIG_ERROR;
+      }
+    });
+
+  browserAutostart
+    .command('disable')
+    .description('Disable browser auto-start while preserving the configured command')
+    .action(() => {
+      const state = disableBrowserAutostart();
+      console.log(`Browser auto-start disabled. Config preserved at ${state.path}`);
+    });
 
   /**
    * Resolve a `<target>` (numeric ref or CSS selector) via the unified resolver.
@@ -3491,17 +3656,21 @@ cli({
   // ── Antigravity serve (long-running, special case) ────────────────────────
 
   const antigravityCmd = program.command('antigravity').description('antigravity commands');
-  antigravityCmd
+  addBrowserEnvOverrideOptions(
+    antigravityCmd
     .command('serve')
     .description('Start Anthropic-compatible API proxy for Antigravity')
     .option('--port <port>', 'Server port (default: 8082)', '8082')
-    .option('--timeout <seconds>', 'Maximum time to wait for a reply (default: 120s)')
+    .option('--timeout <seconds>', 'Maximum time to wait for a reply (default: 120s)'),
+  )
     .action(async (opts) => {
-      // @ts-expect-error JS adapter — no type declarations
-      const { startServe } = await import('../../clis/antigravity/serve.js');
-      await startServe({
-        port: parseInt(opts.port, 10),
-        timeout: opts.timeout ? parsePositiveIntOption(opts.timeout, '--timeout', 120) : undefined,
+      await runWithBrowserEnvOptions(opts, async () => {
+        // @ts-expect-error JS adapter — no type declarations
+        const { startServe } = await import('../../clis/antigravity/serve.js');
+        await startServe({
+          port: parseInt(opts.port, 10),
+          timeout: opts.timeout ? parsePositiveIntOption(opts.timeout, '--timeout', 120) : undefined,
+        });
       });
     });
 
@@ -3639,4 +3808,10 @@ export function resolveBrowserVerifyInvocation(opts: {
     cwd: projectRoot,
     ...(platform === 'win32' ? { shell: true } : {}),
   };
+}
+
+/** Infer a workspace-friendly hostname from a URL, with site override. */
+function inferHost(url: string, site?: string): string {
+  if (site) return site;
+  try { return new URL(url).host; } catch { return 'default'; }
 }

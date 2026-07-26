@@ -20,9 +20,12 @@ import { fileURLToPath } from 'node:url';
 import { getCompletionsFromManifest, hasAllManifests, printCompletionScriptFast } from './completion-fast.js';
 import { findPackageRoot, getCliManifestPath } from './package-paths.js';
 import { PKG_VERSION } from './version.js';
+import { maybeRelaunchWithEnvProxy } from './env-proxy.js';
 import { EXIT_CODES } from './errors.js';
 import { isSupportedNodeVersion, MIN_SUPPORTED_NODE_MAJOR } from './runtime-detect.js';
 import { isIgnorableDaemonPortEnv, unsupportedDaemonPortEnvMessage } from './constants.js';
+
+maybeRelaunchWithEnvProxy();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);

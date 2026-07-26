@@ -1,0 +1,58 @@
+是，但要把“**一个分支**”和“**一个提交**”分开看。
+
+按你当前状态：
+
+- fork 独有 33 个提交
+- 上游独有 11 个提交
+- 最终树差异约 178 个文件、`+14523/-10481`
+- 其中混有多次上游同步和冲突解决提交
+
+**推荐做法：**
+
+```text
+upstream/main
+    └── fork-integration
+          └── 一个 squash 后的“当前所有自定义修改”提交
+```
+
+保留现有 `main` 作为备份，不直接改写它：
+
+```powershell
+cd C:\Users\coolx\Documents\Codex\opencli-fork-work
+
+git fetch origin upstream
+git branch backup/fork-main-20260726 origin/main
+git switch -c fork-integration upstream/main
+git merge --squash origin/main
+```
+
+解决一次冲突并测试后：
+
+```powershell
+git add -A
+git commit -m "chore: carry fork customizations"
+git push -u origin fork-integration
+```
+
+以后同步上游：
+
+```powershell
+git fetch upstream
+git switch fork-integration
+git rebase upstream/main
+git push --force-with-lease
+```
+
+这样做的好处是：以后不会再反复处理旧的 merge commit，通常只会在上游和你的自定义代码改到同一处时产生内容冲突。
+
+不过建议保留这些分支：
+
+```text
+backup/main-before-cleanup-sync-20260726
+experiment/upstream-plus-cleanup
+fork-integration
+```
+
+其中 `experiment/upstream-plus-cleanup` 的标签清理修复，验证通过后再合入 `fork-integration`。
+
+**结论：**你的场景适合做一个新的 `fork-integration` 分支，并把最终自定义结果压成一个提交；不要直接 squash 当前 `main`，也不要把所有历史分支粗暴合并。此次我只做了检查，没有修改 Git 状态。

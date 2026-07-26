@@ -23,6 +23,28 @@ OpenCLI 通过轻量级 **Browser Bridge** Chrome 扩展 + 微守护进程连接
 opencli doctor            # 检查扩展 + 守护进程连接
 ```
 
+## 可选：自动启动浏览器
+
+Daemon 会自动启动，但 Chrome 默认不会自动打开。如果本机使用一个专门给
+OpenCLI 的 Chrome/Chromium Profile，可以配置一条浏览器启动命令；只有在
+当前没有任何 Browser Bridge Profile 连接时才会执行：
+
+```bash
+opencli browser autostart set "/path/to/chrome" -- \
+  --user-data-dir=/path/to/opencli-profile \
+  --remote-debugging-port=9222
+
+opencli browser autostart status
+opencli browser autostart disable
+```
+
+可执行文件和参数会以独立字段保存在 `~/.opencli/browser-autostart.json`，
+OpenCLI 不会通过 shell 执行整条字符串。以 `-` 开头的浏览器参数需要放在
+`--` 分隔符之后。Browser Bridge 本身不要求 `--remote-debugging-port`；但
+如果配置了该参数，OpenCLI 会自动使用对应的 `/json/version` 地址探测浏览器
+是否已经运行，避免重复启动。当已有其他 Browser Bridge Profile 在线，或者
+只是显式指定的某个 Profile 离线时，不会触发自动启动。
+
 ## 多 Tab 定位
 
 浏览器命令必须紧跟一个 `<session>` 位置参数。同一个多步骤流程使用同一个 session；并行任务使用不同 session 隔离。

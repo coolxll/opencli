@@ -28,10 +28,25 @@ import {
   siteHelpData,
 } from './help.js';
 import {
+  ArgumentError,
   CliError,
   EXIT_CODES,
   toEnvelope,
 } from './errors.js';
+import { addBrowserEnvOverrideOptions, runWithBrowserEnvOptions } from './browserEnvOptions.js';
+
+export function normalizeArgValue(argType: string | undefined, value: unknown, name: string): unknown {
+  if (argType !== 'bool' && argType !== 'boolean') return value;
+  if (typeof value === 'boolean') return value;
+  if (value == null || value === '') return false;
+
+  const normalized = String(value).trim().toLowerCase();
+  if (normalized === 'true') return true;
+  if (normalized === 'false') return false;
+
+  throw new ArgumentError(`"${name}" must be either "true" or "false".`);
+}
+
 
 /**
  * Register a single CliCommand as a Commander subcommand.
@@ -66,6 +81,7 @@ export function registerCommandToProgram(siteCmd: Command, cmd: CliCommand): voi
       .option('--window <mode>', 'Browser window mode: foreground or background')
       .option('--site-session <mode>', 'Adapter site session lifecycle: ephemeral or persistent')
       .option('--keep-tab <bool>', 'Keep the browser tab lease after the command finishes');
+    addBrowserEnvOverrideOptions(subCmd, { allowBrowserCdp: cmd.supportsBrowserCdp !== false });
   }
 
   const originalHelpInformation = subCmd.helpInformation.bind(subCmd);
@@ -113,15 +129,27 @@ export function registerCommandToProgram(siteCmd: Command, cmd: CliCommand): voi
       let format = typeof optionsRecord.format === 'string' ? optionsRecord.format : 'table';
       const formatExplicit = subCmd.getOptionValueSource('format') === 'cli';
       if (verbose) process.env.OPENCLI_VERBOSE = '1';
+      if (cmd.deprecated) {
+        const message = typeof cmd.deprecated === 'string' ? cmd.deprecated : `${fullName(cmd)} is deprecated.`;
+        const replacement = cmd.replacedBy ? ` Use ${cmd.replacedBy} instead.` : '';
+        console.error(`Deprecated: ${message}${replacement}`);
+      }
       const globals = typeof subCmd.optsWithGlobals === 'function' ? subCmd.optsWithGlobals() as Record<string, unknown> : {};
-      const result = await executeCommand(cmd, kwargs, verbose, {
+      const executeOpts = {
         prepared: true,
         ...(typeof globals.profile === 'string' && globals.profile.trim() ? { profile: globals.profile.trim() } : {}),
         ...(typeof optionsRecord.trace === 'string' && optionsRecord.trace !== 'off' ? { trace: optionsRecord.trace } : {}),
         ...(cmd.browser && typeof optionsRecord.window === 'string' ? { windowMode: optionsRecord.window } : {}),
         ...(cmd.browser && typeof optionsRecord.siteSession === 'string' ? { siteSession: optionsRecord.siteSession } : {}),
         ...(cmd.browser && typeof optionsRecord.keepTab === 'string' ? { keepTab: optionsRecord.keepTab } : {}),
-      });
+      };
+      const result = cmd.browser
+        ? await runWithBrowserEnvOptions(
+            optionsRecord,
+            () => executeCommand(cmd, kwargs, verbose, executeOpts),
+            { allowBrowserCdp: cmd.supportsBrowserCdp !== false },
+          )
+        : await executeCommand(cmd, kwargs, verbose, executeOpts);
       if (result === null || result === undefined) {
         return;
       }

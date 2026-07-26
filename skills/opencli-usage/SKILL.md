@@ -19,7 +19,7 @@ OpenCLI turns any website, Electron desktop app, or external CLI into a uniform 
 
 ```bash
 # npm global
-npm install -g @jackwener/opencli          # binary: opencli, requires Node >= 21
+npm install -g @jackwener/opencli          # binary: opencli, requires Node >= 20
 opencli doctor                              # run before browser-dependent work (see below)
 
 # From source
@@ -38,7 +38,7 @@ npx tsx src/main.ts <command>               # same surface, no global install
 | `COOKIE` | Chrome logged into the target site + **OpenCLI** extension installed from the [Chrome Web Store](https://chromewebstore.google.com/detail/opencli/ildkmabpimmkaediidaifkhjpohdnifk). Command captures the credential from your live session — no re-login. |
 | `INTERCEPT` | Same as COOKIE, plus opencli opens an automation window to capture a signed request. |
 | `UI` | Same as COOKIE, full DOM interaction. |
-| `LOCAL` | No browser; talks to a local/dev endpoint. |
+| `LOCAL` | No browser; runs directly in Node. It may call a local service or an authenticated remote API such as Feedly. |
 
 Electron desktop apps (cursor, codex, chatwise, discord-app, doubao-app, antigravity, chatgpt-app) route through CDP against the running app — same cookie-less flow as a logged-in browser. Make sure the app is running before invoking.
 
@@ -55,6 +55,8 @@ opencli <site> <command> --help # see positional args and command-specific flags
 Do not hard-code adapter lists — there are 100+ sites and the count moves every week. `opencli list -f json` is the source of truth; it emits one entry per command with `{site, name, aliases, description, strategy, browser, args, columns, ...}`. For an agent, that is always better than grepping a doc.
 
 Before falling back to raw `opencli browser` commands on high-change authenticated sites, check whether a site adapter already exposes the workflow. For example, ChatGPT web has higher-level commands for conversation reads and Deep Research result extraction; discover the current surface with `opencli chatgpt --help` or `opencli list -f json`.
+
+Optional providers installed through `opencli plugin install` appear in the same live registry. Always check `opencli list -f json` instead of assuming a provider is bundled with the core package.
 
 ## Universal flags (work on every adapter command)
 

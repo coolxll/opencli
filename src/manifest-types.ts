@@ -12,11 +12,12 @@ export interface ManifestEntry {
   name: string;
   aliases?: string[];
   description: string;
-  access: 'read' | 'write';
+  access?: 'read' | 'write';
   example?: string;
   domain?: string;
   strategy: string;
   browser: boolean;
+  supportsBrowserCdp?: boolean;
   args: Array<{
     name: string;
     type?: string;
@@ -29,9 +30,13 @@ export interface ManifestEntry {
   }>;
   columns?: string[];
   pipeline?: Record<string, unknown>[];
+  timeout?: number;
+  deprecated?: boolean | string;
+  replacedBy?: string;
   defaultFormat?: 'table' | 'plain' | 'json' | 'yaml' | 'yml' | 'md' | 'markdown' | 'csv';
-  type: 'js';
-  /** Relative path from clis/ dir, e.g. 'bilibili/search.js' */
+  /** 'yaml' or 'ts' — determines how executeCommand loads the handler */
+  type: 'yaml' | 'ts' | 'js';
+  /** Relative path from clis/ dir, e.g. 'bilibili/hot.yaml' or 'bilibili/search.js' */
   modulePath?: string;
   /** Relative path to the source file from clis/ dir (e.g. 'site/cmd.js') */
   sourceFile?: string;

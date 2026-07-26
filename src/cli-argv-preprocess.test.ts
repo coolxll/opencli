@@ -231,7 +231,7 @@ describe('rewriteBrowserArgv', () => {
   it('reserved subcommand list covers every known browser subcommand registered in cli.ts', () => {
     const names = getBrowserSubcommandNames();
     const required = [
-      'analyze', 'back', 'bind', 'check', 'click', 'close', 'console', 'dblclick',
+      'analyze', 'autostart', 'back', 'bind', 'check', 'click', 'close', 'console', 'dblclick',
       'dialog', 'drag', 'eval', 'extract', 'fill', 'find', 'focus', 'frames',
       'get', 'hover', 'init', 'keys', 'network', 'open', 'screenshot', 'scroll',
       'select', 'state', 'tab', 'type', 'unbind', 'uncheck', 'upload', 'verify',
