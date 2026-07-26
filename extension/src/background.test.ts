@@ -277,7 +277,7 @@ describe('background tab isolation', () => {
     vi.stubGlobal('chrome', chrome);
 
     const mod = await import('./background');
-    mod.__test__.setAutomationWindowId(adapterKey('twitter'), 1);
+    mod.__test__.setAutomationWindowId(adapterKey('twitter'), 1, [1]);
 
     const result = await mod.__test__.handleTabs({ id: '1', action: 'tabs', op: 'list', session: adapterKey('twitter') }, adapterKey('twitter'));
 
@@ -654,7 +654,7 @@ describe('background tab isolation', () => {
     vi.stubGlobal('chrome', chrome);
 
     const mod = await import('./background');
-    mod.__test__.setAutomationWindowId(adapterKey('twitter'), 1);
+    mod.__test__.setAutomationWindowId(adapterKey('twitter'), 1, [1]);
 
     const result = await mod.__test__.handleTabs(
       { id: 'close-by-page', action: 'tabs', op: 'close', session: adapterKey('twitter'), page: 'target-1' },
@@ -936,7 +936,7 @@ describe('background tab isolation', () => {
     }));
 
     const mod = await import('./background');
-    mod.__test__.setAutomationWindowId(adapterKey('twitter'), 1);
+    mod.__test__.setAutomationWindowId(adapterKey('twitter'), 1, [1, 4]);
 
     const [first, second] = await Promise.all([
       mod.__test__.handleExec({ id: 'p1', action: 'exec', session: adapterKey('twitter'), page: 'target-1', code: 'window.__task = 1' }, adapterKey('twitter')),
@@ -1134,6 +1134,53 @@ describe('background tab isolation', () => {
     expect(chrome.windows.remove).not.toHaveBeenCalled();
   });
 
+  it('restores every owned tab for a multi-tab browser lease', async () => {
+    const { chrome, tabs, groups } = createChromeMock();
+    const deadline = Date.now() + 600_000;
+    tabs[0].groupId = 200;
+    tabs.push({ id: 4, windowId: 1, url: 'https://second.example', title: 'second', active: false, status: 'complete', groupId: 200 });
+    groups.push({ id: 200, windowId: 1, title: 'OpenCLI Browser', color: 'orange', collapsed: false });
+    vi.stubGlobal('chrome', chrome);
+    await chrome.storage.session.set({
+      opencli_target_lease_registry_v2: {
+        version: 2,
+        contextId: 'user-default',
+        ownedContainers: { interactive: { windowId: 1, groupIds: [200] }, automation: { windowId: null } },
+        leases: {
+          [browserKey('restored-multi')]: {
+            session: 'restored-multi',
+            surface: 'browser',
+            kind: 'owned',
+            windowId: 1,
+            owned: true,
+            preferredTabId: 4,
+            ownedTabIds: [1, 4],
+            contextId: 'user-default',
+            ownership: 'owned',
+            lifecycle: 'persistent',
+            windowRole: 'interactive',
+            idleDeadlineAt: deadline,
+            updatedAt: Date.now(),
+          },
+        },
+      },
+    });
+
+    const mod = await import('./background');
+    await mod.__test__.reconcileTargetLeaseRegistry();
+
+    expect(mod.__test__.getSession(browserKey('restored-multi'))).toEqual(expect.objectContaining({
+      preferredTabId: 4,
+      ownedTabIds: [1, 4],
+    }));
+    const listed = await mod.__test__.handleTabs(
+      { id: 'list-restored', action: 'tabs', op: 'list', session: 'restored-multi', surface: 'browser' },
+      browserKey('restored-multi'),
+    );
+    expect(listed.data).toHaveLength(2);
+    expect(groups).toHaveLength(1);
+  });
+
   it('honors the persisted remaining idle lifetime on reconcile instead of granting a fresh full timeout', async () => {
     const { chrome } = createChromeMock();
     const now = Date.now();
@@ -1238,6 +1285,267 @@ describe('background tab isolation', () => {
     expect(mod.__test__.getSession(browserKey('cleanup'))).toBeNull();
     expect(mod.__test__.getInteractiveContainer()).toEqual({ windowId: null, groupId: null, groupIds: [] });
     expect(groups).toEqual([]);
+  });
+
+  it('removes every historical same-title OpenCLI Browser group when no live lease owns them', async () => {
+    const { chrome, tabs, groups } = createChromeMock();
+    tabs.push({ id: 70, windowId: 7, url: 'https://vacation.example', title: 'trip', active: true, status: 'complete', groupId: 400 });
+    tabs.push({ id: 71, windowId: 8, url: 'https://archive.example', title: 'archive', active: true, status: 'complete', groupId: 401 });
+    groups.push({ id: 400, windowId: 7, title: 'OpenCLI Browser', color: 'blue', collapsed: false });
+    groups.push({ id: 401, windowId: 8, title: 'OpenCLI Browser', color: 'orange', collapsed: false });
+    vi.stubGlobal('chrome', chrome);
+
+    const mod = await import('./background');
+    await mod.__test__.reconcileTargetLeaseRegistry();
+
+    expect(chrome.tabs.remove).toHaveBeenCalledWith(70);
+    expect(chrome.tabs.remove).toHaveBeenCalledWith(71);
+    expect(groups).toEqual([]);
+    expect(mod.__test__.getInteractiveContainer()).toEqual({ windowId: null, groupId: null, groupIds: [] });
+  });
+
+  it('converges historical same-title groups while a live lease exists, then removes the final group', async () => {
+    const { chrome, tabs, groups } = createChromeMock();
+    const deadline = Date.now() + 600_000;
+    tabs.push({ id: 70, windowId: 7, url: 'https://live.example', title: 'live', active: true, status: 'complete', groupId: 400 });
+    tabs.push({ id: 71, windowId: 8, url: 'https://history.example', title: 'history', active: true, status: 'complete', groupId: 401 });
+    groups.push({ id: 400, windowId: 7, title: 'OpenCLI Browser', color: 'orange', collapsed: false });
+    groups.push({ id: 401, windowId: 8, title: 'OpenCLI Browser', color: 'orange', collapsed: false });
+    vi.stubGlobal('chrome', chrome);
+    await chrome.storage.session.set({
+      [REGISTRY_KEY]: {
+        version: 2,
+        contextId: 'user-default',
+        ownedContainers: { interactive: { windowId: 7, groupIds: [400, 401] }, automation: { windowId: null } },
+        leases: {
+          [browserKey('live')]: {
+            session: 'live',
+            surface: 'browser',
+            kind: 'owned',
+            windowId: 7,
+            owned: true,
+            preferredTabId: 70,
+            ownedTabIds: [70],
+            contextId: 'user-default',
+            ownership: 'owned',
+            lifecycle: 'persistent',
+            windowRole: 'interactive',
+            idleDeadlineAt: deadline,
+            updatedAt: Date.now(),
+          },
+        },
+      },
+    });
+
+    const mod = await import('./background');
+    await mod.__test__.reconcileTargetLeaseRegistry();
+
+    expect(groups).toHaveLength(1);
+    expect(tabs.find((tab) => tab.id === 70)?.groupId).toBe(groups[0].id);
+    expect(tabs.find((tab) => tab.id === 71)?.groupId).toBe(groups[0].id);
+
+    const closed = await mod.__test__.handleCommand({ id: 'close-live', action: 'close-window', session: 'live', surface: 'browser' });
+    expect(closed).toEqual(expect.objectContaining({ ok: true }));
+    expect(chrome.tabs.remove).toHaveBeenCalledWith(70);
+    expect(chrome.tabs.remove).toHaveBeenCalledWith(71);
+    expect(groups).toEqual([]);
+  });
+
+  it('lists every tab created by the same owned browser session', async () => {
+    const { chrome } = createChromeMock();
+    vi.stubGlobal('chrome', chrome);
+
+    const mod = await import('./background');
+    await mod.__test__.resolveTabId(undefined, browserKey('multi'), 'https://first.example');
+    await mod.__test__.handleTabs(
+      { id: 'new-second', action: 'tabs', op: 'new', session: 'multi', surface: 'browser', url: 'https://second.example' },
+      browserKey('multi'),
+    );
+
+    const result = await mod.__test__.handleTabs(
+      { id: 'list-multi', action: 'tabs', op: 'list', session: 'multi', surface: 'browser' },
+      browserKey('multi'),
+    );
+
+    expect(result).toEqual(expect.objectContaining({ ok: true }));
+    expect(result.data).toHaveLength(2);
+  });
+
+  it('selects a remaining owned tab when the preferred tab is closed externally', async () => {
+    const { chrome, tabs, groups } = createChromeMock();
+    vi.stubGlobal('chrome', chrome);
+
+    const mod = await import('./background');
+    await mod.__test__.resolveTabId(undefined, browserKey('manual-close'), 'https://first.example');
+    await mod.__test__.handleTabs(
+      { id: 'new-preferred', action: 'tabs', op: 'new', session: 'manual-close', surface: 'browser', url: 'https://second.example' },
+      browserKey('manual-close'),
+    );
+
+    const preferredTabId = mod.__test__.getSession(browserKey('manual-close'))!.preferredTabId!;
+    const removedIndex = tabs.findIndex((tab) => tab.id === preferredTabId);
+    tabs.splice(removedIndex, 1);
+    const onRemovedListener = chrome.tabs.onRemoved.addListener.mock.calls[0][0];
+    await onRemovedListener(preferredTabId);
+
+    const remainingSession = mod.__test__.getSession(browserKey('manual-close'))!;
+    expect(remainingSession.preferredTabId).toBe(1);
+    expect(remainingSession.ownedTabIds).toEqual([1]);
+    expect(groups).toHaveLength(1);
+
+    tabs.splice(tabs.findIndex((tab) => tab.id === 1), 1);
+    groups.splice(0, groups.length);
+    await onRemovedListener(1);
+
+    expect(mod.__test__.getSession(browserKey('manual-close'))).toBeNull();
+    expect(groups).toEqual([]);
+  });
+
+  it('performs final group cleanup when two interactive leases close concurrently', async () => {
+    const { chrome, groups } = createChromeMock();
+    vi.stubGlobal('chrome', chrome);
+
+    const mod = await import('./background');
+    await mod.__test__.resolveTabId(undefined, browserKey('first-close'), 'https://first.example');
+    await mod.__test__.resolveTabId(undefined, browserKey('second-close'), 'https://second.example');
+
+    await Promise.all([
+      mod.__test__.handleCommand({ id: 'close-first', action: 'close-window', session: 'first-close', surface: 'browser' }),
+      mod.__test__.handleCommand({ id: 'close-second', action: 'close-window', session: 'second-close', surface: 'browser' }),
+    ]);
+
+    expect(mod.__test__.getSession(browserKey('first-close'))).toBeNull();
+    expect(mod.__test__.getSession(browserKey('second-close'))).toBeNull();
+    expect(groups).toEqual([]);
+  });
+
+  it('serializes tab creation with close-window so a finishing create cannot leave residue', async () => {
+    const { chrome, groups } = createChromeMock();
+    vi.stubGlobal('chrome', chrome);
+
+    const mod = await import('./background');
+    await mod.__test__.resolveTabId(undefined, browserKey('new-vs-close'), 'https://first.example');
+
+    const createStarted = deferred<void>();
+    const allowCreate = deferred<void>();
+    const originalCreate = chrome.tabs.create;
+    chrome.tabs.create = vi.fn(async (details: any) => {
+      createStarted.resolve();
+      await allowCreate.promise;
+      return originalCreate(details);
+    });
+
+    const newPromise = mod.__test__.handleCommand({
+      id: 'new-racing',
+      action: 'tabs',
+      op: 'new',
+      session: 'new-vs-close',
+      surface: 'browser',
+      url: 'https://second.example',
+    });
+    await createStarted.promise;
+
+    let closeSettled = false;
+    const closePromise = mod.__test__.handleCommand({
+      id: 'close-racing',
+      action: 'close-window',
+      session: 'new-vs-close',
+      surface: 'browser',
+    }).finally(() => { closeSettled = true; });
+
+    await Promise.resolve();
+    expect(closeSettled).toBe(false);
+    allowCreate.resolve();
+
+    const [created, closed] = await Promise.all([newPromise, closePromise]);
+    expect(created).toEqual(expect.objectContaining({ ok: true }));
+    expect(closed).toEqual(expect.objectContaining({ ok: true }));
+    expect(mod.__test__.getSession(browserKey('new-vs-close'))).toBeNull();
+    expect(groups).toEqual([]);
+  });
+
+  it('removes an owned interactive group restored with no live leases', async () => {
+    const { chrome, tabs, groups } = createChromeMock();
+    tabs.push({ id: 50, windowId: 5, url: 'https://orphan.example', title: 'orphan', active: true, status: 'complete', groupId: 200 });
+    groups.push({ id: 200, windowId: 5, title: 'OpenCLI Browser', color: 'orange', collapsed: false });
+    vi.stubGlobal('chrome', chrome);
+    await chrome.storage.session.set({
+      [REGISTRY_KEY]: {
+        version: 2,
+        contextId: 'user-default',
+        ownedContainers: { interactive: { windowId: 5, groupIds: [200] }, automation: { windowId: null } },
+        leases: {},
+      },
+    });
+
+    const mod = await import('./background');
+    await mod.__test__.reconcileTargetLeaseRegistry();
+
+    expect(groups).toEqual([]);
+    expect(mod.__test__.getInteractiveContainer()).toEqual({ windowId: null, groupId: null, groupIds: [] });
+  });
+
+  it('updates the preferred tab when selecting another owned page', async () => {
+    const { chrome } = createChromeMock();
+    vi.stubGlobal('chrome', chrome);
+
+    const mod = await import('./background');
+    const firstTabId = await mod.__test__.resolveTabId(undefined, browserKey('select-tab'), 'https://first.example');
+    await mod.__test__.handleTabs(
+      { id: 'new-selected', action: 'tabs', op: 'new', session: 'select-tab', surface: 'browser', url: 'https://second.example' },
+      browserKey('select-tab'),
+    );
+    expect(mod.__test__.getSession(browserKey('select-tab'))!.preferredTabId).not.toBe(firstTabId);
+
+    await mod.__test__.handleTabs(
+      { id: 'select-first', action: 'tabs', op: 'select', session: 'select-tab', surface: 'browser', page: `target-${firstTabId}` },
+      browserKey('select-tab'),
+    );
+
+    expect(mod.__test__.getSession(browserKey('select-tab'))!.preferredTabId).toBe(firstTabId);
+  });
+
+  it('keeps the lease alive when closing one of several owned tabs', async () => {
+    const { chrome } = createChromeMock();
+    vi.stubGlobal('chrome', chrome);
+
+    const mod = await import('./background');
+    const firstTabId = await mod.__test__.resolveTabId(undefined, browserKey('close-one'), 'https://first.example');
+    await mod.__test__.handleTabs(
+      { id: 'new-second', action: 'tabs', op: 'new', session: 'close-one', surface: 'browser', url: 'https://second.example' },
+      browserKey('close-one'),
+    );
+
+    const result = await mod.__test__.handleTabs(
+      { id: 'close-first', action: 'tabs', op: 'close', session: 'close-one', surface: 'browser', page: `target-${firstTabId}` },
+      browserKey('close-one'),
+    );
+
+    expect(result).toEqual(expect.objectContaining({ ok: true }));
+    expect(mod.__test__.getSession(browserKey('close-one'))).toEqual(expect.objectContaining({
+      preferredTabId: 10,
+      ownedTabIds: [10],
+    }));
+  });
+
+  it('returns cleanup_failed and preserves the lease when Chrome cannot remove owned tabs or groups', async () => {
+    const { chrome } = createChromeMock();
+    vi.stubGlobal('chrome', chrome);
+
+    const mod = await import('./background');
+    await mod.__test__.resolveTabId(undefined, browserKey('cleanup-failure'), 'https://owned.example');
+    chrome.tabs.remove = vi.fn(async () => { throw new Error('remove blocked'); });
+    chrome.tabs.ungroup = vi.fn(async () => { throw new Error('ungroup blocked'); });
+
+    const result = await mod.__test__.handleCommand({
+      id: 'close-failure',
+      action: 'close-window',
+      session: 'cleanup-failure',
+      surface: 'browser',
+    });
+
+    expect(result).toEqual(expect.objectContaining({ ok: false, errorCode: 'cleanup_failed' }));
+    expect(mod.__test__.getSession(browserKey('cleanup-failure'))).not.toBeNull();
   });
 
   it('deduplicates concurrent automation container creation', async () => {
@@ -1523,7 +1831,7 @@ describe('background tab isolation', () => {
     vi.stubGlobal('chrome', chrome);
 
     const mod = await import('./background');
-    mod.__test__.setAutomationWindowId(adapterKey('twitter'), 1);
+    mod.__test__.setAutomationWindowId(adapterKey('twitter'), 1, [1]);
 
     const tabId = await mod.__test__.resolveTabId(1, adapterKey('twitter'));
 
@@ -1541,7 +1849,7 @@ describe('background tab isolation', () => {
     vi.stubGlobal('chrome', chrome);
 
     const mod = await import('./background');
-    mod.__test__.setAutomationWindowId(adapterKey('twitter'), 1);
+    mod.__test__.setAutomationWindowId(adapterKey('twitter'), 1, [1]);
 
     // Should still resolve (by finding/creating a tab in the correct window)
     const tabId = await mod.__test__.resolveTabId(1, adapterKey('twitter'));
@@ -1579,7 +1887,7 @@ describe('background tab isolation', () => {
     mod.__test__.resetWindowIdleTimer(adapterKey('twitter'));
     await vi.advanceTimersByTimeAsync(30001);
 
-    expect(chrome.windows.remove).not.toHaveBeenCalled();
+    expect(chrome.windows.remove).toHaveBeenCalledWith(1);
     expect(mod.__test__.getSession(adapterKey('twitter'))).toBeNull();
   });
 
@@ -1962,8 +2270,9 @@ describe('background tab isolation', () => {
   }
 
   it('does not wipe the persisted registry when a lease idle alarm fires before recovery', async () => {
-    const { chrome, groups } = createChromeMock();
+    const { chrome, tabs, groups } = createChromeMock();
     const deadline = Date.now() + 30_000;
+    tabs.push({ id: 50, windowId: 5, url: 'https://old.example', title: 'old', active: true, status: 'complete', groupId: 200 });
     groups.push({ id: 200, windowId: 5, title: 'OpenCLI Browser', color: 'orange', collapsed: false });
     vi.stubGlobal('chrome', chrome);
     await chrome.storage.session.set({
@@ -2009,18 +2318,20 @@ describe('background tab isolation', () => {
     await alarmDone;
 
     const finalRegistry = await readDirect(REGISTRY_KEY);
-    // Group ids never re-enter the durable registry (browser-session scoped);
-    // the canonical group is re-found in memory via the title layer instead.
+    // The pre-recovery event did not wipe the lease, and startup cleanup
+    // removed the historical interactive group because no browser lease lives.
     expect(finalRegistry.ownedContainers.interactive.groupId).toBeUndefined();
-    expect(mod.__test__.getInteractiveContainer().groupId).toBe(200);
+    expect(mod.__test__.getInteractiveContainer()).toEqual({ windowId: null, groupId: null, groupIds: [] });
+    expect(groups).toEqual([]);
     // The lease was released down the proper owned-container path, not wiped.
     expect(chrome.windows.remove).toHaveBeenCalledWith(1);
     expect(mod.__test__.getSession(adapterKey('twitter'))).toBeNull();
   });
 
   it('does not wipe the persisted registry when tabs.onRemoved fires before recovery', async () => {
-    const { chrome, groups } = createChromeMock();
+    const { chrome, tabs, groups } = createChromeMock();
     const deadline = Date.now() + 30_000;
+    tabs.push({ id: 50, windowId: 5, url: 'https://old.example', title: 'old', active: true, status: 'complete', groupId: 200 });
     groups.push({ id: 200, windowId: 5, title: 'OpenCLI Browser', color: 'orange', collapsed: false });
     vi.stubGlobal('chrome', chrome);
     await chrome.storage.session.set({
@@ -2063,14 +2374,15 @@ describe('background tab isolation', () => {
     await removedDone;
 
     const finalRegistry = await readDirect(REGISTRY_KEY);
-    // Group ids never re-enter the durable registry (browser-session scoped).
+    // The unrelated lease survives while historical interactive state is gone.
     expect(finalRegistry.ownedContainers.interactive.groupId).toBeUndefined();
-    expect(mod.__test__.getInteractiveContainer().groupId).toBe(200);
+    expect(mod.__test__.getInteractiveContainer()).toEqual({ windowId: null, groupId: null, groupIds: [] });
+    expect(groups).toEqual([]);
     // The unrelated lease survived the unrelated tab-close.
     expect(finalRegistry.leases[adapterKey('twitter')]).toBeDefined();
   });
 
-  it('adopts an untitled orphan group through the session ledger instead of creating a new one', async () => {
+  it('removes an untitled orphan group from the session ledger when no live lease remains', async () => {
     const { chrome, tabs, groups } = createChromeMock();
     tabs.push({ id: 50, windowId: 5, url: 'about:blank', title: 'blank', active: true, status: 'complete', groupId: 200 });
     groups.push({ id: 200, windowId: 5, title: '', collapsed: false });
@@ -2090,14 +2402,12 @@ describe('background tab isolation', () => {
     const mod = await import('./background');
     await mod.__test__.reconcileTargetLeaseRegistry();
 
-    // The orphan was adopted and titled — no second "OpenCLI Browser" spawned.
-    expect(groups).toHaveLength(1);
-    expect(groups[0].title).toBe('OpenCLI Browser');
+    expect(chrome.tabs.remove).toHaveBeenCalledWith(50);
+    expect(groups).toEqual([]);
     const createGroupCalls = chrome.tabs.group.mock.calls.filter((call: any[]) => call[0]?.createProperties);
     expect(createGroupCalls).toHaveLength(0);
     const container = mod.__test__.getInteractiveContainer();
-    expect(container.groupId).toBe(200);
-    expect(container.groupIds).toContain(200);
+    expect(container).toEqual({ windowId: null, groupId: null, groupIds: [] });
   });
 
   it('prunes a vanished group id from the session ledger on convergence', async () => {
