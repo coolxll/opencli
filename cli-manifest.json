@@ -24117,6 +24117,68 @@
   },
   {
     "site": "linux-do",
+    "name": "digest-context",
+    "description": "Batch-read topic bodies and high-signal comments for editorial review",
+    "access": "read",
+    "domain": "linux.do",
+    "strategy": "cookie",
+    "browser": true,
+    "supportsBrowserCdp": true,
+    "args": [
+      {
+        "name": "ids",
+        "type": "string",
+        "required": true,
+        "positional": true,
+        "help": "Comma-separated topic IDs (max 25)"
+      },
+      {
+        "name": "comments-limit",
+        "type": "int",
+        "default": 8,
+        "required": false,
+        "help": "Comments returned per topic"
+      },
+      {
+        "name": "comment-scan",
+        "type": "int",
+        "default": 80,
+        "required": false,
+        "help": "First comments scanned for likes"
+      },
+      {
+        "name": "body-chars",
+        "type": "int",
+        "default": 6000,
+        "required": false,
+        "help": "Maximum main-body characters"
+      },
+      {
+        "name": "comment-chars",
+        "type": "int",
+        "default": 1000,
+        "required": false,
+        "help": "Maximum characters per comment"
+      }
+    ],
+    "columns": [
+      "id",
+      "title",
+      "url",
+      "author",
+      "body",
+      "likes",
+      "created_at",
+      "comments",
+      "scanned_comment_count"
+    ],
+    "type": "js",
+    "modulePath": "linux-do/digest-context.js",
+    "sourceFile": "linux-do/digest-context.js",
+    "navigateBefore": "https://linux.do"
+  },
+  {
+    "site": "linux-do",
     "name": "feed",
     "description": "linux.do 话题列表（需登录；支持全站、标签、分类）",
     "access": "read",
