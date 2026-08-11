@@ -11,6 +11,16 @@ describe('linux-do feed command', () => {
   it('navigates to linux.do and returns parsed topic rows', async () => {
     const command = getRegistry().get('linux-do/feed');
     expect(command?.func).toBeTypeOf('function');
+    __test__.setLiveMetadataForTests({
+      categories: [{
+        id: 4,
+        name: '开发调优',
+        description: '',
+        slug: 'develop',
+        parentCategoryId: null,
+        parent: null,
+      }],
+    });
 
     const page = {
       goto: vi.fn().mockResolvedValue(undefined),
@@ -28,6 +38,7 @@ describe('linux-do feed command', () => {
                 created_at: '2026-04-01T09:00:00.000Z',
                 like_count: 8,
                 views: 300,
+                category_id: 4,
                 slug: 'opencli-bridge-fix',
               },
             ],
@@ -49,6 +60,8 @@ describe('linux-do feed command', () => {
         created: new Date('2026-04-01T09:00:00.000Z').toLocaleString(),
         likes: 8,
         views: 300,
+        category_id: 4,
+        category: '开发调优',
         url: 'https://linux.do/t/topic/101',
         pinned: false,
       },

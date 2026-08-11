@@ -54,6 +54,8 @@ interface TopicListItem {
   created: string;
   likes: number;
   views: number;
+  category_id: number | null;
+  category: string;
   url: string;
   pinned: boolean;
 }
@@ -327,20 +329,36 @@ function isPinnedTopic(topic: any): boolean {
     || (typeof topic?.pinned_until === 'string' && topic.pinned_until.length > 0);
 }
 
-function topicListRichFromJson(data: any, limit: number, includePinned = false): TopicListItem[] {
+function categoryDisplayName(category: ResolvedLinuxDoCategory | undefined): string {
+  if (!category) return '';
+  return category.parent ? `${category.parent.name} / ${category.name}` : category.name;
+}
+
+function topicListRichFromJson(
+  data: any,
+  limit: number,
+  includePinned = false,
+  categories: ResolvedLinuxDoCategory[] = [],
+): TopicListItem[] {
   const topics: any[] = data?.topic_list?.topics ?? [];
   return topics
     .filter((topic) => includePinned || !isPinnedTopic(topic))
     .slice(0, limit)
-    .map((t: any) => ({
-      title: t.fancy_title ?? t.title ?? '',
-      replies: normalizeReplyCount(t.posts_count),
-      created: toLocalTime(t.created_at),
-      likes: t.like_count ?? 0,
-      views: t.views ?? 0,
-      url: `https://linux.do/t/topic/${t.id}`,
-      pinned: isPinnedTopic(t),
-    }));
+    .map((t: any) => {
+      const categoryId = Number(t.category_id);
+      const category = categories.find((item) => item.id === categoryId);
+      return {
+        title: t.fancy_title ?? t.title ?? '',
+        replies: normalizeReplyCount(t.posts_count),
+        created: toLocalTime(t.created_at),
+        likes: t.like_count ?? 0,
+        views: t.views ?? 0,
+        category_id: Number.isFinite(categoryId) ? categoryId : null,
+        category: categoryDisplayName(category),
+        url: `https://linux.do/t/topic/${t.id}`,
+        pinned: isPinnedTopic(t),
+      };
+    });
 }
 
 /**
@@ -473,7 +491,13 @@ export async function executeLinuxDoFeed(page: IPage | null, kwargs: CommandArgs
   await ensureLinuxDoHome(page);
   const request = await resolveFeedRequest(page, kwargs);
   const data = await fetchLinuxDoJson(page, request.url, { skipNavigate: true });
-  return topicListRichFromJson(data, limit, kwargs['include-pinned'] === true);
+  let categories: ResolvedLinuxDoCategory[] = [];
+  try {
+    categories = await fetchLiveCategories(page);
+  } catch {
+    // Topic delivery remains useful if category metadata is temporarily unavailable.
+  }
+  return topicListRichFromJson(data, limit, kwargs['include-pinned'] === true, categories);
 }
 
 export function buildLinuxDoCompatFooter(replacement: string): string {
@@ -488,7 +512,7 @@ cli({
   domain: 'linux.do',
   strategy: Strategy.COOKIE,
   browser: true,
-  columns: ['title', 'replies', 'created', 'likes', 'views', 'url', 'pinned'],
+  columns: ['title', 'replies', 'created', 'likes', 'views', 'category_id', 'category', 'url', 'pinned'],
   // Keep args inline so the build-time manifest compiler can preserve them.
   args: [
     {

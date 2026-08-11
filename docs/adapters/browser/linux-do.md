@@ -107,7 +107,7 @@ opencli linux-do feed --category 94 --tag 4 --view top --period monthly
 | `--ascending` | Sort ascending instead of descending | off |
 | `--period P` | `all`, `daily`, `weekly`, `monthly`, `quarterly`, `yearly` (only with `--view top`) | `weekly` |
 
-Output columns: `title`, `replies`, `created`, `likes`, `views`, `url`
+Output columns: `title`, `replies`, `created`, `likes`, `views`, `category_id`, `category`, `url`, `pinned`. Sub-categories use the `Parent / Child` display path.
 
 ## categories
 
