@@ -24271,6 +24271,8 @@
       "created",
       "likes",
       "views",
+      "category_id",
+      "category",
       "url",
       "pinned"
     ],

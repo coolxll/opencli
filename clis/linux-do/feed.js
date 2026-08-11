@@ -238,20 +238,31 @@ function isPinnedTopic(topic) {
         || (typeof topic?.pinned_at === 'string' && topic.pinned_at.length > 0)
         || (typeof topic?.pinned_until === 'string' && topic.pinned_until.length > 0);
 }
-function topicListRichFromJson(data, limit, includePinned = false) {
+function categoryDisplayName(category) {
+    if (!category)
+        return '';
+    return category.parent ? `${category.parent.name} / ${category.name}` : category.name;
+}
+function topicListRichFromJson(data, limit, includePinned = false, categories = []) {
     const topics = data?.topic_list?.topics ?? [];
     return topics
         .filter((topic) => includePinned || !isPinnedTopic(topic))
         .slice(0, limit)
-        .map((t) => ({
-        title: t.fancy_title ?? t.title ?? '',
-        replies: normalizeReplyCount(t.posts_count),
-        created: toLocalTime(t.created_at),
-        likes: t.like_count ?? 0,
-        views: t.views ?? 0,
-        url: `https://linux.do/t/topic/${t.id}`,
-        pinned: isPinnedTopic(t),
-    }));
+        .map((t) => {
+        const categoryId = Number(t.category_id);
+        const category = categories.find((item) => item.id === categoryId);
+        return {
+            title: t.fancy_title ?? t.title ?? '',
+            replies: normalizeReplyCount(t.posts_count),
+            created: toLocalTime(t.created_at),
+            likes: t.like_count ?? 0,
+            views: t.views ?? 0,
+            category_id: Number.isFinite(categoryId) ? categoryId : null,
+            category: categoryDisplayName(category),
+            url: `https://linux.do/t/topic/${t.id}`,
+            pinned: isPinnedTopic(t),
+        };
+    });
 }
 /**
  * 解析标签，支持 id、name、slug 三种输入。
@@ -371,12 +382,22 @@ export const LINUX_DO_FEED_ARGS = [
         choices: ['all', 'daily', 'weekly', 'monthly', 'quarterly', 'yearly'],
     },
 ];
-async function runLinuxDoFeed(page, kwargs) {
+export async function executeLinuxDoFeed(page, kwargs) {
     const limit = (kwargs.limit || 20);
     await ensureLinuxDoHome(page);
     const request = await resolveFeedRequest(page, kwargs);
     const data = await fetchLinuxDoJson(page, request.url, { skipNavigate: true });
-    return topicListRichFromJson(data, limit, kwargs['include-pinned'] === true);
+    let categories = [];
+    try {
+        categories = await fetchLiveCategories(page);
+    }
+    catch {
+        // Topic delivery remains useful if category metadata is temporarily unavailable.
+    }
+    return topicListRichFromJson(data, limit, kwargs['include-pinned'] === true, categories);
+}
+export function buildLinuxDoCompatFooter(replacement) {
+    return `Deprecated compatibility command. Prefer: ${replacement}`;
 }
 cli({
     site: 'linux-do',
@@ -386,9 +407,59 @@ cli({
     domain: 'linux.do',
     strategy: Strategy.COOKIE,
     browser: true,
-    columns: ['title', 'replies', 'created', 'likes', 'views', 'url', 'pinned'],
-    args: LINUX_DO_FEED_ARGS,
-    func: runLinuxDoFeed,
+    columns: ['title', 'replies', 'created', 'likes', 'views', 'category_id', 'category', 'url', 'pinned'],
+    // Keep args inline so the build-time manifest compiler can preserve them.
+    args: [
+        {
+            name: 'view',
+            type: 'str',
+            default: 'latest',
+            help: 'View type',
+            choices: ['latest', 'hot', 'top'],
+        },
+        {
+            name: 'tag',
+            type: 'str',
+            help: 'Tag name, slug, or id',
+        },
+        {
+            name: 'category',
+            type: 'str',
+            help: 'Category name, slug, id, or parent/name path',
+        },
+        { name: 'limit', type: 'int', default: 20, help: 'Number of items (per_page)' },
+        {
+            name: 'include-pinned',
+            type: 'boolean',
+            default: false,
+            help: 'Include pinned topics (excluded by default)',
+        },
+        {
+            name: 'order',
+            type: 'str',
+            default: 'default',
+            help: 'Sort order',
+            choices: [
+                'default',
+                'created',
+                'activity',
+                'views',
+                'posts',
+                'category',
+                'likes',
+                'op_likes',
+                'posters',
+            ],
+        },
+        { name: 'ascending', type: 'boolean', default: false, help: 'Sort ascending (default: desc)' },
+        {
+            name: 'period',
+            type: 'str',
+            help: 'Time period (only for --view top)',
+            choices: ['all', 'daily', 'weekly', 'monthly', 'quarterly', 'yearly'],
+        },
+    ],
+    func: executeLinuxDoFeed,
 });
 export const __test__ = {
     resetMetadataCaches() {
