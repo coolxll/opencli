@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { getRegistry } from '../../registry.js';
+import { getRegistry } from '../../src/registry.js';
 import './timeline.js';
 
 describe('twitter timeline command', () => {
@@ -8,13 +8,10 @@ describe('twitter timeline command', () => {
     expect(command?.func).toBeTypeOf('function');
 
     const page = {
-      goto: vi.fn().mockResolvedValue(undefined),
-      wait: vi.fn().mockResolvedValue(undefined),
+      getCookies: vi.fn().mockResolvedValue([{ name: 'ct0', value: 'ct0-token' }]),
       evaluate: vi.fn()
-        // ct0 cookie lookup
-        .mockResolvedValueOnce('ct0-token')
         // resolveTwitterQueryId()
-        .mockResolvedValueOnce('query-live')
+        .mockResolvedValueOnce({ queryId: 'query-live' })
         // timeline fetch
         .mockResolvedValueOnce({
           data: {
@@ -73,6 +70,7 @@ describe('twitter timeline command', () => {
       {
         id: '1',
         author: 'alice',
+        bio: '',
         text: 'hello timeline',
         likes: 5,
         retweets: 2,
@@ -80,22 +78,24 @@ describe('twitter timeline command', () => {
         views: 42,
         created_at: 'Wed Apr 01 10:00:00 +0000 2026',
         url: 'https://x.com/alice/status/1',
+        has_media: false,
+        media_urls: [],
+        media_posters: [],
+        card: null,
+        quoted_tweet: null,
       },
     ]);
-    expect(page.goto).toHaveBeenCalledWith('https://x.com');
-    expect(page.wait).toHaveBeenCalledWith(3);
-    expect(page.evaluate).toHaveBeenCalledTimes(3);
-    expect(String(page.evaluate.mock.calls[2][0])).toContain('/i/api/graphql/query-live/HomeTimeline');
+    expect(page.getCookies).toHaveBeenCalledWith({ url: 'https://x.com' });
+    expect(page.evaluate).toHaveBeenCalledTimes(2);
+    expect(String(page.evaluate.mock.calls[1][0])).toContain('/i/api/graphql/query-live/HomeTimeline');
   });
 
   it('uses the HomeLatestTimeline endpoint for following timeline requests', async () => {
     const command = getRegistry().get('twitter/timeline');
     const page = {
-      goto: vi.fn().mockResolvedValue(undefined),
-      wait: vi.fn().mockResolvedValue(undefined),
+      getCookies: vi.fn().mockResolvedValue([{ name: 'ct0', value: 'ct0-token' }]),
       evaluate: vi.fn()
-        .mockResolvedValueOnce('ct0-token')
-        .mockResolvedValueOnce('query-following')
+        .mockResolvedValueOnce({ queryId: 'query-following' })
         .mockResolvedValueOnce({
           data: {
             home: {
@@ -109,7 +109,7 @@ describe('twitter timeline command', () => {
 
     await command!.func!(page as any, { type: 'following', limit: 3 });
 
-    const fetchScript = String(page.evaluate.mock.calls[2][0]);
+    const fetchScript = String(page.evaluate.mock.calls[1][0]);
     expect(fetchScript).toContain('/i/api/graphql/query-following/HomeLatestTimeline');
     expect(fetchScript).toContain('method: "POST"');
     expect(fetchScript).toContain('%22seenTweetIds%22%3A%5B%5D');

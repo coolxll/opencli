@@ -127,6 +127,7 @@ export class Page extends BasePage {
     if (result.page) {
       this._page = result.page;
     }
+    ensureNavigationSucceeded(url, result.data as NavigateResult | undefined);
     this._lastUrl = url;
     // Inject stealth + settle in a single round-trip instead of two sequential exec calls.
     // The stealth guard flag prevents double-injection; settle uses DOM stability detection.

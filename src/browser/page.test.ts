@@ -23,24 +23,29 @@ import { Page } from './page.js';
 describe('Page.goto', () => {
   beforeEach(() => {
     sendCommandMock.mockReset();
+    sendCommandFullMock.mockReset();
   });
 
   it('fails fast when navigate returns the internal blank page', async () => {
-    sendCommandMock.mockResolvedValueOnce({
-      tabId: 11,
-      url: 'data:text/html,<html></html>',
-      timedOut: true,
+    sendCommandFullMock.mockResolvedValueOnce({
+      page: 'page-11',
+      data: {
+        tabId: 11,
+        url: 'data:text/html,<html></html>',
+        timedOut: true,
+      },
     });
 
     const page = new Page('site:v2ex');
 
-    await expect(page.goto('https://www.v2ex.com')).rejects.toThrow(
+    await expect(page.goto('https://www.v2ex.com', { waitUntil: 'none' })).rejects.toThrow(
       'Navigation failed for https://www.v2ex.com: browser remained on data:text/html,<html></html>',
     );
-    expect(sendCommandMock).toHaveBeenCalledTimes(1);
-    expect(sendCommandMock).toHaveBeenCalledWith('navigate', {
+    expect(sendCommandFullMock).toHaveBeenCalledTimes(1);
+    expect(sendCommandFullMock).toHaveBeenCalledWith('navigate', {
       url: 'https://www.v2ex.com',
-      workspace: 'site:v2ex',
+      session: 'site:v2ex',
+      surface: 'browser',
     });
   });
 });

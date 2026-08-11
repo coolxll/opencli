@@ -451,7 +451,9 @@ export function generateSnapshotJs(opts: DomSnapshotOptions = {}): string {
   function isSearchElement(el) {
     // Check class names for search indicators
     // Note: SVG elements have className as SVGAnimatedString (not a string), use baseVal
-    const className = (typeof el.className === 'string' ? el.className : el.className?.baseVal || '').toLowerCase();
+    const className = (typeof el.className === 'string'
+      ? el.className
+      : el.getAttribute('class') || el.className?.baseVal || '').toLowerCase();
     const classes = className.split(/\\s+/).filter(Boolean);
     for (const cls of classes) {
       const cleaned = cls.replace(/[^a-z0-9-]/g, '');

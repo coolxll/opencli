@@ -7524,9 +7524,8 @@
       {
         "name": "model",
         "type": "str",
-        "default": "sonnet",
         "required": false,
-        "help": "Model to use: sonnet, opus, or haiku",
+        "help": "Switch to sonnet, opus, or haiku before sending. Omit to keep the current selection.",
         "choices": [
           "sonnet",
           "opus",
@@ -8292,6 +8291,12 @@
         "required": true,
         "positional": true,
         "help": "Text, command (e.g. /review), or skill (e.g. $imagegen)"
+      },
+      {
+        "name": "pick",
+        "type": "str",
+        "required": false,
+        "help": "Picker option label to select when a slash command opens the picker (e.g. \"Review Agent\")"
       },
       {
         "name": "project",
@@ -25579,6 +25584,7 @@
     "domain": "www.midjourney.com",
     "strategy": "ui",
     "browser": true,
+    "supportsBrowserCdp": true,
     "args": [
       {
         "name": "job",
@@ -25694,6 +25700,7 @@
     "domain": "www.midjourney.com",
     "strategy": "ui",
     "browser": true,
+    "supportsBrowserCdp": true,
     "args": [
       {
         "name": "image",
@@ -25732,6 +25739,7 @@
     "domain": "www.midjourney.com",
     "strategy": "cookie",
     "browser": true,
+    "supportsBrowserCdp": true,
     "args": [
       {
         "name": "job",
@@ -25795,6 +25803,7 @@
     "domain": "www.midjourney.com",
     "strategy": "ui",
     "browser": true,
+    "supportsBrowserCdp": true,
     "args": [
       {
         "name": "prompt",
@@ -25967,6 +25976,7 @@
     "domain": "www.midjourney.com",
     "strategy": "cookie",
     "browser": true,
+    "supportsBrowserCdp": true,
     "args": [
       {
         "name": "limit",
@@ -26024,6 +26034,7 @@
     "domain": "www.midjourney.com",
     "strategy": "ui",
     "browser": true,
+    "supportsBrowserCdp": true,
     "args": [
       {
         "name": "timeout",
@@ -26059,6 +26070,7 @@
     "domain": "www.midjourney.com",
     "strategy": "cookie",
     "browser": true,
+    "supportsBrowserCdp": true,
     "args": [],
     "columns": [
       "plan",
@@ -26089,6 +26101,7 @@
     "domain": "www.midjourney.com",
     "strategy": "ui",
     "browser": true,
+    "supportsBrowserCdp": true,
     "args": [],
     "columns": [
       "model",
@@ -26114,6 +26127,7 @@
     "domain": "www.midjourney.com",
     "strategy": "cookie",
     "browser": true,
+    "supportsBrowserCdp": true,
     "args": [
       {
         "name": "job",
@@ -26151,6 +26165,7 @@
     "domain": "www.midjourney.com",
     "strategy": "cookie",
     "browser": true,
+    "supportsBrowserCdp": true,
     "args": [],
     "columns": [
       "logged_in",
@@ -28917,6 +28932,7 @@
     "domain": "www.pinterest.com",
     "strategy": "cookie",
     "browser": true,
+    "supportsBrowserCdp": true,
     "args": [
       {
         "name": "name",
@@ -28963,6 +28979,7 @@
     "domain": "www.pinterest.com",
     "strategy": "cookie",
     "browser": true,
+    "supportsBrowserCdp": true,
     "args": [
       {
         "name": "board",
@@ -28998,6 +29015,7 @@
     "domain": "www.pinterest.com",
     "strategy": "cookie",
     "browser": true,
+    "supportsBrowserCdp": true,
     "args": [
       {
         "name": "board",
@@ -29036,6 +29054,7 @@
     "domain": "www.pinterest.com",
     "strategy": "cookie",
     "browser": true,
+    "supportsBrowserCdp": true,
     "args": [
       {
         "name": "board",
@@ -29071,6 +29090,7 @@
     "domain": "www.pinterest.com",
     "strategy": "cookie",
     "browser": true,
+    "supportsBrowserCdp": true,
     "args": [
       {
         "name": "board",
@@ -29111,6 +29131,7 @@
     "domain": "www.pinterest.com",
     "strategy": "cookie",
     "browser": true,
+    "supportsBrowserCdp": true,
     "args": [
       {
         "name": "board",
@@ -29147,6 +29168,7 @@
     "domain": "www.pinterest.com",
     "strategy": "cookie",
     "browser": true,
+    "supportsBrowserCdp": true,
     "args": [
       {
         "name": "board",
@@ -29198,6 +29220,7 @@
     "domain": "www.pinterest.com",
     "strategy": "cookie",
     "browser": true,
+    "supportsBrowserCdp": true,
     "args": [
       {
         "name": "pin",
@@ -29233,6 +29256,7 @@
     "domain": "www.pinterest.com",
     "strategy": "cookie",
     "browser": true,
+    "supportsBrowserCdp": true,
     "args": [
       {
         "name": "pin",
@@ -29267,6 +29291,7 @@
     "domain": "www.pinterest.com",
     "strategy": "cookie",
     "browser": true,
+    "supportsBrowserCdp": true,
     "args": [
       {
         "name": "image",
@@ -29329,6 +29354,7 @@
     "domain": "www.pinterest.com",
     "strategy": "cookie",
     "browser": true,
+    "supportsBrowserCdp": true,
     "args": [
       {
         "name": "pin",
@@ -29364,6 +29390,7 @@
     "domain": "www.pinterest.com",
     "strategy": "cookie",
     "browser": true,
+    "supportsBrowserCdp": true,
     "args": [
       {
         "name": "pin",
@@ -29425,6 +29452,7 @@
     "domain": "www.pinterest.com",
     "strategy": "cookie",
     "browser": true,
+    "supportsBrowserCdp": true,
     "args": [
       {
         "name": "pin",
@@ -29466,6 +29494,7 @@
     "domain": "www.pinterest.com",
     "strategy": "cookie",
     "browser": true,
+    "supportsBrowserCdp": true,
     "args": [
       {
         "name": "query",
@@ -29503,6 +29532,7 @@
     "domain": "www.pinterest.com",
     "strategy": "cookie",
     "browser": true,
+    "supportsBrowserCdp": true,
     "args": [
       {
         "name": "query",
@@ -29541,6 +29571,7 @@
     "domain": "www.pinterest.com",
     "strategy": "cookie",
     "browser": true,
+    "supportsBrowserCdp": true,
     "args": [
       {
         "name": "query",
@@ -29577,6 +29608,7 @@
     "domain": "www.pinterest.com",
     "strategy": "cookie",
     "browser": true,
+    "supportsBrowserCdp": true,
     "args": [
       {
         "name": "username",
@@ -29611,6 +29643,7 @@
     "domain": "www.pinterest.com",
     "strategy": "cookie",
     "browser": true,
+    "supportsBrowserCdp": true,
     "args": [
       {
         "name": "username",
@@ -29660,6 +29693,7 @@
     "domain": "www.pinterest.com",
     "strategy": "cookie",
     "browser": true,
+    "supportsBrowserCdp": true,
     "args": [
       {
         "name": "username",
@@ -40294,6 +40328,7 @@
     "domain": "x.com",
     "strategy": "cookie",
     "browser": true,
+    "supportsBrowserCdp": true,
     "args": [
       {
         "name": "username",

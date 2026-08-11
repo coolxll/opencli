@@ -317,7 +317,7 @@ describe('registerCommandToProgram browser env overrides', () => {
       'launchpad',
     ]);
 
-    expect(mockExecuteCommand).toHaveBeenCalledWith(cmd, {}, false);
+    expect(mockExecuteCommand).toHaveBeenCalledWith(cmd, {}, false, { prepared: true });
     expect(seen).toEqual([
       {
         endpoint: 'http://127.0.0.1:9333',

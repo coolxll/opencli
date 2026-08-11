@@ -46,7 +46,7 @@ describe('linux-do feed command', () => {
       {
         title: 'OpenCLI bridge fix',
         replies: 11,
-        created: '2026/4/1 17:00:00',
+        created: new Date('2026-04-01T09:00:00.000Z').toLocaleString(),
         likes: 8,
         views: 300,
         url: 'https://linux.do/t/topic/101',

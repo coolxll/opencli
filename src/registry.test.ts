@@ -71,6 +71,7 @@ describe('cli() registration', () => {
     const localhostCmd = cli({
       site: 'test-registry',
       name: 'localhost-ui',
+      access: 'read',
       domain: 'localhost',
       strategy: Strategy.UI,
       browser: true,
@@ -78,6 +79,7 @@ describe('cli() registration', () => {
     const appCmd = cli({
       site: 'test-registry',
       name: 'app-ui',
+      access: 'read',
       domain: 'doubao-app',
       strategy: Strategy.UI,
       browser: true,
@@ -91,6 +93,7 @@ describe('cli() registration', () => {
     const cmd = cli({
       site: 'test-registry',
       name: 'remote-ui',
+      access: 'read',
       domain: 'x.com',
       strategy: Strategy.UI,
       browser: true,
