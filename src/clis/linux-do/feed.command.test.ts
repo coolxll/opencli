@@ -50,8 +50,32 @@ describe('linux-do feed command', () => {
         likes: 8,
         views: 300,
         url: 'https://linux.do/t/topic/101',
+        pinned: false,
       },
     ]);
+  });
+
+  it('filters pinned topics unless they are explicitly included', async () => {
+    const command = getRegistry().get('linux-do/feed');
+    const topics = [
+      { id: 1, title: 'Old pinned', pinned: true, created_at: '2026-01-01T00:00:00Z' },
+      { id: 2, title: 'Current topic', pinned: false, created_at: '2026-08-11T00:00:00Z' },
+    ];
+    const page = {
+      goto: vi.fn().mockResolvedValue(undefined),
+      wait: vi.fn().mockResolvedValue(undefined),
+      evaluate: vi.fn().mockResolvedValue({ ok: true, status: 200, data: { topic_list: { topics } } }),
+    };
+
+    const filtered = await (command!.func as Function)!(page as any, { view: 'latest', limit: 20 });
+    const diagnostic = await (command!.func as Function)!(page as any, {
+      view: 'latest',
+      limit: 20,
+      'include-pinned': true,
+    });
+
+    expect(filtered.map((topic: { title: string }) => topic.title)).toEqual(['Current topic']);
+    expect(diagnostic.map((topic: { title: string }) => topic.title)).toEqual(['Old pinned', 'Current topic']);
   });
 
   it('requests the resolved top feed url for category and tag combinations', async () => {

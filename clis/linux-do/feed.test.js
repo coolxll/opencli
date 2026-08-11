@@ -14,6 +14,19 @@ describe('linux-do feed metadata resolution', () => {
         });
         expect(request.url).toBe('/latest.json?per_page=20');
     });
+    it('filters pinned topics by default and can include them explicitly', () => {
+        const data = {
+            topic_list: {
+                topics: [
+                    { id: 1, title: 'Old pinned', pinned: true, created_at: '2026-01-01T00:00:00Z' },
+                    { id: 2, title: 'Current topic', pinned: false, created_at: '2026-08-11T00:00:00Z' },
+                    { id: 3, title: 'Dismissed pin', pinned: false, pinned_at: '2026-01-02T00:00:00Z', created_at: '2026-01-02T00:00:00Z' },
+                ],
+            },
+        };
+        expect(__test__.topicListRichFromJson(data, 20).map((topic) => topic.title)).toEqual(['Current topic']);
+        expect(__test__.topicListRichFromJson(data, 20, true).map((topic) => topic.pinned)).toEqual([true, false, true]);
+    });
     it('builds the replacement URL for legacy hot weekly', async () => {
         const request = await __test__.resolveFeedRequest(null, {
             view: 'top',

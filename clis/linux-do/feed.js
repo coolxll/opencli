@@ -232,15 +232,25 @@ function normalizeReplyCount(postsCount) {
     const count = typeof postsCount === 'number' ? postsCount : 1;
     return Math.max(0, count - 1);
 }
-function topicListRichFromJson(data, limit) {
+function isPinnedTopic(topic) {
+    return topic?.pinned === true
+        || topic?.pinned_globally === true
+        || (typeof topic?.pinned_at === 'string' && topic.pinned_at.length > 0)
+        || (typeof topic?.pinned_until === 'string' && topic.pinned_until.length > 0);
+}
+function topicListRichFromJson(data, limit, includePinned = false) {
     const topics = data?.topic_list?.topics ?? [];
-    return topics.slice(0, limit).map((t) => ({
+    return topics
+        .filter((topic) => includePinned || !isPinnedTopic(topic))
+        .slice(0, limit)
+        .map((t) => ({
         title: t.fancy_title ?? t.title ?? '',
         replies: normalizeReplyCount(t.posts_count),
         created: toLocalTime(t.created_at),
         likes: t.like_count ?? 0,
         views: t.views ?? 0,
         url: `https://linux.do/t/topic/${t.id}`,
+        pinned: isPinnedTopic(t),
     }));
 }
 /**
@@ -331,6 +341,12 @@ export const LINUX_DO_FEED_ARGS = [
     },
     { name: 'limit', type: 'int', default: 20, help: 'Number of items (per_page)' },
     {
+        name: 'include-pinned',
+        type: 'boolean',
+        default: false,
+        help: 'Include pinned topics (excluded by default)',
+    },
+    {
         name: 'order',
         type: 'str',
         default: 'default',
@@ -360,7 +376,7 @@ async function runLinuxDoFeed(page, kwargs) {
     await ensureLinuxDoHome(page);
     const request = await resolveFeedRequest(page, kwargs);
     const data = await fetchLinuxDoJson(page, request.url, { skipNavigate: true });
-    return topicListRichFromJson(data, limit);
+    return topicListRichFromJson(data, limit, kwargs['include-pinned'] === true);
 }
 cli({
     site: 'linux-do',
@@ -370,7 +386,7 @@ cli({
     domain: 'linux.do',
     strategy: Strategy.COOKIE,
     browser: true,
-    columns: ['title', 'replies', 'created', 'likes', 'views', 'url'],
+    columns: ['title', 'replies', 'created', 'likes', 'views', 'url', 'pinned'],
     args: LINUX_DO_FEED_ARGS,
     func: runLinuxDoFeed,
 });
@@ -391,5 +407,6 @@ export const __test__ = {
     setCacheDirForTests(dir) {
         testCacheDirOverride = dir;
     },
+    topicListRichFromJson,
     resolveFeedRequest,
 };

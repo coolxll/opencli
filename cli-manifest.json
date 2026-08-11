@@ -24157,6 +24157,13 @@
         "help": "Number of items (per_page)"
       },
       {
+        "name": "include-pinned",
+        "type": "boolean",
+        "default": false,
+        "required": false,
+        "help": "Include pinned topics (excluded by default)"
+      },
+      {
         "name": "order",
         "type": "str",
         "default": "default",
@@ -24202,7 +24209,8 @@
       "created",
       "likes",
       "views",
-      "url"
+      "url",
+      "pinned"
     ],
     "type": "js",
     "modulePath": "linux-do/categories.js",
