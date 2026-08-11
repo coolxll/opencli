@@ -46,6 +46,9 @@ describe('linux-do digest-context', () => {
 
         expect(page.goto).toHaveBeenCalledTimes(1);
         expect(page.evaluate).toHaveBeenCalledTimes(1);
+        const script = page.evaluate.mock.calls[0][0];
+        expect(script).toContain('MAX_CONCURRENCY = 2');
+        expect(script).toContain('response.status === 429');
         expect(result).toEqual([expect.objectContaining({ id: 42, body: 'Body' })]);
     });
 

@@ -68,15 +68,26 @@ async function fetchTopicContexts(page, ids, commentScan) {
     const script = `(async () => {
       const ids = ${JSON.stringify(ids)};
       const commentScan = ${JSON.stringify(commentScan)};
+      const MAX_CONCURRENCY = 2;
+      const MAX_ATTEMPTS = 4;
+      const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
       async function json(path) {
-        const response = await fetch(path, { credentials: 'include' });
-        let data = null;
-        try { data = await response.json(); } catch {}
-        if (!data) return { ok: false, status: response.status, error: 'invalid_json' };
-        if (!response.ok) return { ok: false, status: response.status, error: 'http_error' };
-        return { ok: true, status: response.status, data };
+        for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
+          const response = await fetch(path, { credentials: 'include' });
+          const retryable = response.status === 429 || response.status >= 500;
+          if (retryable && attempt + 1 < MAX_ATTEMPTS) {
+            await sleep(1000 * (2 ** attempt));
+            continue;
+          }
+          let data = null;
+          try { data = await response.json(); } catch {}
+          if (!data) return { ok: false, status: response.status, error: 'invalid_json' };
+          if (!response.ok) return { ok: false, status: response.status, error: 'http_error' };
+          return { ok: true, status: response.status, data };
+        }
+        return { ok: false, status: 0, error: 'retry_exhausted' };
       }
-      return Promise.all(ids.map(async (id) => {
+      async function loadTopic(id) {
         const initial = await json('/t/' + id + '.json?include_raw=true');
         if (!initial.ok) return { id, ok: false, status: initial.status };
         const stream = Array.isArray(initial.data?.post_stream?.stream)
@@ -103,7 +114,21 @@ async function fetchTopicContexts(page, ids, commentScan) {
             posts: [...initialPosts, ...extraPosts],
           },
         };
-      }));
+      }
+      const results = new Array(ids.length);
+      let cursor = 0;
+      async function worker() {
+        while (cursor < ids.length) {
+          const index = cursor;
+          cursor += 1;
+          results[index] = await loadTopic(ids[index]);
+          await sleep(250);
+        }
+      }
+      await Promise.all(
+        Array.from({ length: Math.min(MAX_CONCURRENCY, ids.length) }, () => worker()),
+      );
+      return results;
     })()`;
     const results = await page.evaluate(script);
     if (!Array.isArray(results))
