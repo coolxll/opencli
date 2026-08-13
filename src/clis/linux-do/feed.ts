@@ -276,26 +276,43 @@ async function fetchLiveCategories(page: IPage | null): Promise<ResolvedLinuxDoC
           ? data.category_list.categories
           : [];
 
-        const resolvedTop = topCategories.map((category: RawLinuxDoCategory) => toCategoryRecord(category, null));
-        const parentById = new Map<number, LinuxDoCategoryRecord>(resolvedTop.map((item) => [item.id, item]));
+        const categoriesMap = new Map<number, ResolvedLinuxDoCategory>();
 
-        const subcategoryGroups = await Promise.allSettled(
-          topCategories
-            .filter((category: RawLinuxDoCategory) => Array.isArray(category.subcategory_ids) && category.subcategory_ids.length > 0)
-            .map(async (category: RawLinuxDoCategory) => {
-              const subData = await fetchLinuxDoJson(page, `/categories.json?parent_category_id=${category.id}`, { skipNavigate: true });
-              const subCategories: RawLinuxDoCategory[] = Array.isArray(subData?.category_list?.categories)
+        async function processRawCategory(
+          rawCat: RawLinuxDoCategory,
+          parent: LinuxDoCategoryRecord | null
+        ): Promise<void> {
+          if (categoriesMap.has(rawCat.id)) return;
+          const rec = toCategoryRecord(rawCat, parent);
+          categoriesMap.set(rawCat.id, rec);
+
+          let subCategories: RawLinuxDoCategory[] = Array.isArray(rawCat.subcategory_list)
+            ? rawCat.subcategory_list
+            : Array.isArray(rawCat.subcategories)
+              ? rawCat.subcategories
+              : [];
+
+          if (subCategories.length === 0 && Array.isArray(rawCat.subcategory_ids) && rawCat.subcategory_ids.length > 0) {
+            try {
+              const subData = await fetchLinuxDoJson(page, `/categories.json?parent_category_id=${rawCat.id}`, { skipNavigate: true });
+              subCategories = Array.isArray(subData?.category_list?.categories)
                 ? subData.category_list.categories
                 : [];
-              const parent = parentById.get(category.id) ?? null;
-              return subCategories.map((subCategory: RawLinuxDoCategory) => toCategoryRecord(subCategory, parent));
-            }),
-        );
+            } catch {
+              subCategories = [];
+            }
+          }
 
-        const categories = [
-          ...resolvedTop,
-          ...subcategoryGroups.flatMap((result) => result.status === 'fulfilled' ? result.value : []),
-        ];
+          for (const sub of subCategories) {
+            await processRawCategory(sub, rec);
+          }
+        }
+
+        for (const cat of topCategories) {
+          await processRawCategory(cat, null);
+        }
+
+        const categories = Array.from(categoriesMap.values());
         await writeMetadataCache('categories', categories);
         return categories;
       } catch (error) {
