@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { windowsSessionHooks } from '../windows-session.js';
 
 import {
   browserAutostartHooks,
@@ -17,6 +18,8 @@ describe('browser autostart configuration', () => {
   beforeEach(() => {
     configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'opencli-browser-autostart-'));
     vi.stubEnv('OPENCLI_CONFIG_DIR', configDir);
+    vi.spyOn(windowsSessionHooks, 'platform').mockReturnValue('linux');
+    vi.spyOn(windowsSessionHooks, 'isWslWindowsHost').mockReturnValue(false);
   });
 
   afterEach(() => {
@@ -75,5 +78,37 @@ describe('browser autostart configuration', () => {
 
     await expect(launchConfiguredBrowser()).resolves.toMatchObject({ attempted: true, launched: true });
     expect(spawnSpy).toHaveBeenCalledWith('/usr/bin/chromium', ['--user-data-dir=/tmp/opencli']);
+  });
+
+  it('does not spawn a configured browser from Windows Session 0', async () => {
+    saveBrowserAutostartConfig({ executable: 'chrome.exe', args: ['--user-data-dir=C:\\Workspace\\chrome-debug'] });
+    vi.spyOn(windowsSessionHooks, 'platform').mockReturnValue('win32');
+    vi.spyOn(windowsSessionHooks, 'getCurrentSessionId').mockReturnValue(0);
+    const spawnSpy = vi.spyOn(browserAutostartHooks, 'spawnConfiguredBrowser');
+
+    await expect(launchConfiguredBrowser()).resolves.toMatchObject({
+      attempted: false,
+      reason: 'windows-session-0',
+      error: expect.stringContaining('Session 0'),
+    });
+    expect(spawnSpy).not.toHaveBeenCalled();
+  });
+
+  it('can reuse an already-running configured browser from Windows Session 0', async () => {
+    saveBrowserAutostartConfig({
+      executable: 'chrome.exe',
+      args: ['--remote-debugging-port=9222'],
+    });
+    vi.spyOn(windowsSessionHooks, 'platform').mockReturnValue('win32');
+    vi.spyOn(windowsSessionHooks, 'getCurrentSessionId').mockReturnValue(0);
+    vi.spyOn(browserAutostartHooks, 'probeConfiguredBrowser').mockResolvedValue(true);
+    const spawnSpy = vi.spyOn(browserAutostartHooks, 'spawnConfiguredBrowser');
+
+    await expect(launchConfiguredBrowser()).resolves.toMatchObject({
+      attempted: true,
+      launched: false,
+      reason: 'already-running',
+    });
+    expect(spawnSpy).not.toHaveBeenCalled();
   });
 });

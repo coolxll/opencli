@@ -11,6 +11,7 @@ import { formatDuration } from '../download/progress.js';
 import { log } from '../logger.js';
 import { PKG_VERSION } from '../version.js';
 import { formatDaemonVersion, isDaemonStale } from '../browser/daemon-version.js';
+import { BrowserConnectError, EXIT_CODES } from '../errors.js';
 
 export async function daemonStatus(): Promise<void> {
   const status = await fetchDaemonStatus();
@@ -77,7 +78,18 @@ export async function daemonRestart(): Promise<void> {
     log.warn(`Restarting daemon will disconnect ${before.profiles.length} browser profile(s); the extension should reconnect automatically.`);
   }
 
-  const result = await restartDaemon();
+  let result: Awaited<ReturnType<typeof restartDaemon>>;
+  try {
+    result = await restartDaemon();
+  } catch (err) {
+    if (err instanceof BrowserConnectError) {
+      log.error(err.message);
+      if (err.hint) log.error(`Hint: ${err.hint}`);
+      process.exitCode = EXIT_CODES.SERVICE_UNAVAIL;
+      return;
+    }
+    throw err;
+  }
   if (!result.stopped) {
     log.error('Failed to stop daemon before restart.');
     process.exitCode = 1;

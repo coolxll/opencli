@@ -6,8 +6,11 @@ import { __test__ as cdpTest } from './browser/cdp.js';
 import { classifyBrowserError } from './browser/errors.js';
 import * as daemonTransport from './browser/daemon-transport.js';
 import * as daemonLifecycle from './browser/daemon-lifecycle.js';
+import { windowsSessionHooks } from './windows-session.js';
 
 beforeEach(() => {
+  vi.spyOn(windowsSessionHooks, 'platform').mockReturnValue('linux');
+  vi.spyOn(windowsSessionHooks, 'isWslWindowsHost').mockReturnValue(false);
   // Unit tests must never launch a developer's configured local browser.
   vi.spyOn(daemonLifecycle.daemonLifecycleHooks, 'launchConfiguredBrowser').mockResolvedValue({
     attempted: false,
@@ -295,6 +298,42 @@ describe('BrowserBridge state', () => {
     const bridge = new BrowserBridge();
 
     await expect(bridge.connect({ timeout: 0.1 })).rejects.toThrow('Stale daemon could not be replaced');
+  });
+
+  it('does not replace a stale daemon from Windows Session 0', async () => {
+    vi.spyOn(windowsSessionHooks, 'platform').mockReturnValue('win32');
+    vi.spyOn(windowsSessionHooks, 'getCurrentSessionId').mockReturnValue(0);
+    vi.spyOn(daemonTransport, 'getDaemonHealth').mockResolvedValue({
+      state: 'ready',
+      status: {
+        ok: true,
+        pid: 999999,
+        uptime: 0,
+        daemonVersion: '0.0.1',
+        extensionConnected: true,
+        pending: 0,
+        memoryMB: 0,
+        port: 19825,
+      },
+    });
+    const shutdownSpy = vi.spyOn(daemonLifecycle.daemonLifecycleHooks, 'requestDaemonShutdown');
+
+    const bridge = new BrowserBridge();
+
+    await expect(bridge.connect({ timeout: 0.1 })).rejects.toThrow('cannot be replaced from Windows Session 0');
+    expect(shutdownSpy).not.toHaveBeenCalled();
+  });
+
+  it('does not start a stopped daemon from Windows Session 0', async () => {
+    vi.spyOn(windowsSessionHooks, 'platform').mockReturnValue('win32');
+    vi.spyOn(windowsSessionHooks, 'getCurrentSessionId').mockReturnValue(0);
+    vi.spyOn(daemonTransport, 'getDaemonHealth').mockResolvedValue({ state: 'stopped', status: null });
+    const spawnSpy = vi.spyOn(daemonLifecycle.daemonLifecycleHooks, 'spawnDaemonProcess');
+
+    const bridge = new BrowserBridge();
+
+    await expect(bridge.connect({ timeout: 0.1 })).rejects.toThrow('Session 0');
+    expect(spawnSpy).not.toHaveBeenCalled();
   });
 
   it('falls back to SIGKILL when stale daemon refuses graceful shutdown', async () => {

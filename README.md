@@ -176,6 +176,7 @@ When the site you need is not yet covered, use the `opencli-adapter-author` skil
 | `OPENCLI_WINDOW` | command default | Set to `foreground` or `background` to override Browser Bridge window placement. Browser-backed commands also accept `--window <foreground\|background>`. |
 | `OPENCLI_BROWSER_CONNECT_TIMEOUT` | `45` | Seconds to wait for browser connection |
 | `OPENCLI_BROWSER_COMMAND_TIMEOUT` | `60` | Seconds to wait for a single browser command |
+| `OPENCLI_ALLOW_SESSION0_AUTOSTART` | unset | Windows and WSL: explicitly allow daemon/browser auto-start in non-interactive Session 0. By default OpenCLI requires process creation to happen in a signed-in desktop session. |
 | `OPENCLI_CDP_ENDPOINT` | — | Chrome DevTools Protocol endpoint for remote browser or Electron apps |
 | `OPENCLI_CDP_TARGET` | — | Filter CDP targets by URL substring (e.g. `detail.1688.com`) |
 | `OPENCLI_VERBOSE` | `false` | Enable verbose logging (`-v` flag also works) |

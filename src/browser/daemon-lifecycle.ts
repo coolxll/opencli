@@ -5,6 +5,7 @@ import * as path from 'node:path';
 import { DEFAULT_DAEMON_PORT } from '../constants.js';
 import { BrowserConnectError } from '../errors.js';
 import { PKG_VERSION } from '../version.js';
+import { getWindowsSessionAutostartBlock } from '../windows-session.js';
 import { waitForBridgeReady } from './bridge-readiness.js';
 import { launchConfiguredBrowser } from './autostart.js';
 import { fetchDaemonStatus, getDaemonHealth, requestDaemonShutdown, type DaemonHealth, type DaemonStatus } from './daemon-transport.js';
@@ -45,6 +46,10 @@ export function resolveDaemonLaunchSpec(): DaemonLaunchSpec {
 }
 
 export function spawnDaemonProcess(): ChildProcess {
+  const sessionBlock = getWindowsSessionAutostartBlock();
+  if (sessionBlock) {
+    throw new BrowserConnectError(sessionBlock.message, sessionBlock.hint, 'daemon-not-running');
+  }
   const launch = resolveDaemonLaunchSpec();
   const proc = spawn(launch.binary, launch.args, {
     detached: true,
@@ -83,6 +88,10 @@ export const daemonLifecycleHooks = {
 };
 
 export async function restartDaemon(opts: { stopTimeoutMs?: number; startTimeoutMs?: number } = {}): Promise<DaemonRestartResult> {
+  const sessionBlock = getWindowsSessionAutostartBlock();
+  if (sessionBlock) {
+    throw new BrowserConnectError(sessionBlock.message, sessionBlock.hint, 'daemon-not-running');
+  }
   const previousStatus = await fetchDaemonStatus();
   let stopped = previousStatus === null;
   if (previousStatus) {
@@ -120,6 +129,14 @@ export async function ensureBrowserBridgeReady(
   const mayAutostartBrowser = health.state === 'stopped' || health.state === 'no-extension';
 
   if (isStale) {
+    const sessionBlock = getWindowsSessionAutostartBlock();
+    if (sessionBlock) {
+      throw new BrowserConnectError(
+        `OpenCLI daemon is stale, but it cannot be replaced from Windows Session ${sessionBlock.sessionId}`,
+        sessionBlock.hint,
+        'daemon-not-running',
+      );
+    }
     const reason = daemonVersion
       ? `v${daemonVersion} ≠ v${PKG_VERSION}`
       : `pre-version daemon, CLI is v${PKG_VERSION}`;
@@ -161,6 +178,10 @@ export async function ensureBrowserBridgeReady(
   }
 
   if (staleDaemonReplaced || health.state === 'stopped') {
+    const sessionBlock = getWindowsSessionAutostartBlock();
+    if (sessionBlock) {
+      throw new BrowserConnectError(sessionBlock.message, sessionBlock.hint, 'daemon-not-running');
+    }
     if (verbose && (process.env.OPENCLI_VERBOSE || process.stderr.isTTY)) {
       process.stderr.write('⏳ Starting daemon...\n');
     }
@@ -191,6 +212,8 @@ export async function ensureBrowserBridgeReady(
           process.stderr.write('🚀 Launching configured browser for Browser Bridge...\n');
         }
       } else if (launch.attempted && launch.reason === 'launch-failed') {
+        autostartFailure = launch.error;
+      } else if (!launch.attempted && launch.reason === 'windows-session-0') {
         autostartFailure = launch.error;
       }
     }

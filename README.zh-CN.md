@@ -161,6 +161,7 @@ Agent 在内部自动处理所有 `opencli browser` 命令——你只需用自�
 | `OPENCLI_WINDOW` | 命令默认值 | 设为 `foreground` 或 `background` 来覆盖 Browser Bridge 窗口位置。浏览器型命令也支持 `--window <foreground\|background>` |
 | `OPENCLI_BROWSER_CONNECT_TIMEOUT` | `45` | 浏览器连接超时（秒） |
 | `OPENCLI_BROWSER_COMMAND_TIMEOUT` | `60` | 单个浏览器命令超时（秒） |
+| `OPENCLI_ALLOW_SESSION0_AUTOSTART` | 未设置 | Windows 和 WSL：显式允许在非交互 Session 0 中自动启动 daemon/浏览器。默认要求由已登录的桌面会话创建这些进程。 |
 | `OPENCLI_CDP_ENDPOINT` | — | Chrome DevTools Protocol 端点，用于远程浏览器或 Electron 应用 |
 | `OPENCLI_CDP_TARGET` | — | 按 URL 子串过滤 CDP target（如 `detail.1688.com`） |
 | `OPENCLI_VERBOSE` | `false` | 启用详细日志（`-v` 也可以） |

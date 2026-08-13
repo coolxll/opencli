@@ -28,6 +28,7 @@ import { log } from './logger.js';
 import { PKG_VERSION } from './version.js';
 import { DEFAULT_CONTEXT_ID } from './browser/profile.js';
 import { recordExtensionVersion } from './update-check.js';
+import { getWindowsSessionAutostartBlock } from './windows-session.js';
 import {
   PROFILE_DISCONNECTED_HINT,
   buildCommandDispatchFailure,
@@ -44,6 +45,12 @@ import {
 } from './session-lease.js';
 
 const PORT = DEFAULT_DAEMON_PORT;
+const sessionBlock = getWindowsSessionAutostartBlock();
+if (sessionBlock) {
+  log.error(sessionBlock.message);
+  log.error(`Hint: ${sessionBlock.hint}`);
+  process.exit(EXIT_CODES.SERVICE_UNAVAIL);
+}
 if (!isIgnorableDaemonPortEnv(process.env.OPENCLI_DAEMON_PORT)) {
   log.error(unsupportedDaemonPortEnvMessage(process.env.OPENCLI_DAEMON_PORT));
   process.exit(EXIT_CODES.USAGE_ERROR);

@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { getWindowsSessionAutostartBlock } from '../windows-session.js';
 
 export interface BrowserAutostartConfig {
   version: 1;
@@ -19,6 +20,7 @@ export interface BrowserAutostartState {
 
 export type BrowserAutostartLaunchResult =
   | { attempted: false; reason: 'disabled' | 'invalid-config' }
+  | { attempted: false; reason: 'windows-session-0'; error: string }
   | { attempted: true; launched: false; reason: 'already-running'; config: BrowserAutostartConfig }
   | { attempted: true; launched: true; config: BrowserAutostartConfig }
   | { attempted: true; launched: false; reason: 'launch-failed'; error: string; config: BrowserAutostartConfig };
@@ -173,6 +175,15 @@ export async function launchConfiguredBrowser(): Promise<BrowserAutostartLaunchR
 
   if (config.probeUrl && await browserAutostartHooks.probeConfiguredBrowser(config.probeUrl)) {
     return { attempted: true, launched: false, reason: 'already-running', config };
+  }
+
+  const sessionBlock = getWindowsSessionAutostartBlock();
+  if (sessionBlock) {
+    return {
+      attempted: false,
+      reason: 'windows-session-0',
+      error: `${sessionBlock.message}. ${sessionBlock.hint}`,
+    };
   }
 
   try {

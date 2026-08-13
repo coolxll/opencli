@@ -21,6 +21,7 @@ vi.mock('../browser/daemon-lifecycle.js', () => ({
 
 import { daemonRestart, daemonStatus, daemonStop } from './daemon.js';
 import { PKG_VERSION } from '../version.js';
+import { BrowserConnectError, EXIT_CODES } from '../errors.js';
 
 describe('daemonStatus', () => {
   let stdoutSpy: ReturnType<typeof vi.spyOn>;
@@ -335,5 +336,20 @@ describe('daemonRestart', () => {
 
     expect(stderrSpy).toHaveBeenCalledWith(expect.stringContaining('Failed to stop daemon before restart'));
     expect(process.exitCode).toBe(1);
+  });
+
+  it('reports Session 0 startup refusal as service unavailable', async () => {
+    fetchDaemonStatusMock.mockResolvedValue(null);
+    restartDaemonMock.mockRejectedValue(new BrowserConnectError(
+      'Refusing to start OpenCLI background processes in Windows Session 0',
+      'Run only when user is logged on',
+      'daemon-not-running',
+    ));
+
+    await daemonRestart();
+
+    expect(stderrSpy).toHaveBeenCalledWith(expect.stringContaining('Session 0'));
+    expect(stderrSpy).toHaveBeenCalledWith(expect.stringContaining('Run only when user is logged on'));
+    expect(process.exitCode).toBe(EXIT_CODES.SERVICE_UNAVAIL);
   });
 });
