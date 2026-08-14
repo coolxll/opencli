@@ -18,7 +18,6 @@
  */
 
 import { htmlToMarkdown } from '../utils.js';
-import type { ExtractionQuality } from './article-extract.js';
 
 const DEFAULT_CHUNK_SIZE = 20000;
 const MIN_CHUNK_SIZE = 100;
@@ -129,8 +128,6 @@ export interface RunExtractOptions {
     selector: string | null;
     start: number;
     chunkSize: number;
-    source?: string;
-    quality?: ExtractionQuality;
 }
 
 export interface RunExtractResult {
@@ -143,8 +140,6 @@ export interface RunExtractResult {
     end: number;
     next_start_char: number | null;
     content: string;
-    source?: string;
-    quality?: ExtractionQuality;
 }
 
 /** End-to-end host-side pipeline: HTML → markdown → chunked envelope. */
@@ -165,8 +160,6 @@ export function runExtractFromHtml(opts: RunExtractOptions): RunExtractResult {
         end: chunk.end,
         next_start_char: chunk.nextStartChar,
         content: chunk.content,
-        ...(opts.source ? { source: opts.source } : {}),
-        ...(opts.quality ? { quality: opts.quality } : {}),
     };
 }
 

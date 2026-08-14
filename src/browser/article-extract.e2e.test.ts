@@ -66,22 +66,6 @@ async function renderMarkdown(
 }
 
 describe('article extract → markdown e2e fixtures', () => {
-  it('uses character-based quality metrics for CJK prose', () => {
-    const sentence = '这是第一段中文正文，包含足够的内容来测试字符计数和句子判断。这里是第二句正文，继续提供真实文章信息以及上下文。最后是第三句，用于确保中文没有空格时仍能正确判断。';
-    const html = `<html><body><article>${Array.from({ length: 4 }, () => `<p>${sentence}</p>`).join('')}</article></body></html>`;
-    const article = runExtract(html, 'https://example.com/cjk');
-    expect(article?.quality).toMatchObject({ botBlocked: false, passed: true });
-    expect(article?.quality?.textChars).toBeGreaterThan(200);
-    expect(article?.quality?.proseSentenceCount).toBeGreaterThanOrEqual(2);
-  });
-
-  it('rejects bot-block pages at the quality gate', () => {
-    const html = `<html><body><main><p>Your submission has been received. Please verify you are human.</p><p>${'Checking your browser. '.repeat(30)}</p></main></body></html>`;
-    const article = runExtract(html, 'https://example.com/blocked');
-    expect(article?.quality?.botBlocked).toBe(true);
-    expect(article?.quality?.passed).toBe(false);
-  });
-
   it('extracts a Wikipedia article fixture and keeps infobox/reference noise out of markdown', async () => {
     const url = 'https://en.wikipedia.org/wiki/Markdown';
     const cleanSelectors = ['.infobox', '.navbox', '.reference', '.mw-editsection', '.metadata'];

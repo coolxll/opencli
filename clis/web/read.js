@@ -15,7 +15,6 @@
  */
 import { cli, Strategy } from '@jackwener/opencli/registry';
 import { downloadArticle } from '@jackwener/opencli/download/article-download';
-import { buildExtractArticleFromHtmlJs } from '@jackwener/opencli/browser/article-extract';
 
 const NETWORK_IDLE_QUIET_MS = 1000;
 const NETWORK_IDLE_POLL_MS = 500;
@@ -446,22 +445,8 @@ const command = cli({
         }
         // Extract article content using browser-side heuristics
         const data = await page.evaluate(buildRenderAwareExtractorJs({ frames: frameMode }));
-        let article = null;
-        if (data?.contentHtml) {
-            try {
-                article = await page.evaluate(buildExtractArticleFromHtmlJs(
-                    data.contentHtml,
-                    data?.diagnostics?.url || url,
-                ));
-            } catch {
-                article = null;
-            }
-        }
-        const extracted = article?.html && (article.quality?.passed || !data?.contentHtml)
-            ? { ...data, title: article.title || data.title, contentHtml: article.html, extractionSource: article.source, extractionQuality: article.quality }
-            : data;
         if (captureSupported) await drainNetworkCapture(page, networkEntries);
-        if (shouldDiagnose) process.stderr.write(formatDiagnostics(extracted, networkEntries, captureSupported));
+        if (shouldDiagnose) process.stderr.write(formatDiagnostics(data, networkEntries, captureSupported));
         // Determine Referer from URL for image downloads
         let referer = '';
         try {
@@ -470,12 +455,12 @@ const command = cli({
         }
         catch { /* ignore */ }
         const result = await downloadArticle({
-            title: extracted?.title || 'untitled',
-            author: extracted?.author,
-            publishTime: extracted?.publishTime,
+            title: data?.title || 'untitled',
+            author: data?.author,
+            publishTime: data?.publishTime,
             sourceUrl: url,
-            contentHtml: extracted?.contentHtml || '',
-            imageUrls: extracted?.imageUrls,
+            contentHtml: data?.contentHtml || '',
+            imageUrls: data?.imageUrls,
         }, {
             output: kwargs.output,
             downloadImages: kwargs['download-images'],

@@ -118,29 +118,6 @@ describe('runExtractFromHtml', () => {
         expect(r.chunk_size).toBe(r.end - r.start);
         expect(r.next_start_char).toBe(r.end);
     });
-
-    it('carries extraction source and quality diagnostics when supplied', () => {
-        const r = runExtractFromHtml({
-            html: '<article><p>正文。</p></article>',
-            url: 'https://example.com/c',
-            title: 't',
-            selector: null,
-            start: 0,
-            chunkSize: 20000,
-            source: 'readability',
-            quality: {
-                textChars: 3,
-                proseChars: 3,
-                proseSentenceCount: 1,
-                proseRatio: 1,
-                linkDensity: 0,
-                botBlocked: false,
-                passed: false,
-            },
-        });
-        expect(r.source).toBe('readability');
-        expect(r.quality?.proseChars).toBe(3);
-    });
 });
 
 describe('buildExtractHtmlJs', () => {

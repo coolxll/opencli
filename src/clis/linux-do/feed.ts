@@ -84,8 +84,6 @@ interface RawLinuxDoCategory {
   description_text?: string | null;
   slug?: string | null;
   subcategory_ids?: number[] | null;
-  subcategory_list?: RawLinuxDoCategory[] | null;
-  subcategories?: RawLinuxDoCategory[] | null;
 }
 
 interface MetadataCacheEnvelope<T> {
