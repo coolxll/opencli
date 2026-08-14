@@ -107,10 +107,11 @@ describe('web/read stdout behavior', () => {
         });
 
         expect(page.wait).not.toHaveBeenCalled();
-        expect(page.evaluate).toHaveBeenCalledTimes(2);
+        expect(page.evaluate).toHaveBeenCalledTimes(3);
         expect(page.evaluate.mock.calls[0]?.[0]).toContain('"#gridDatas li"');
         expect(page.evaluate.mock.calls[0]?.[0]).toContain('sameOriginFrameDocs');
         expect(page.evaluate.mock.calls[1]?.[0]).toContain('const frameMode = "same-origin"');
+        expect(page.evaluate.mock.calls[2]?.[0]).toContain('const sourceHtml =');
     });
 
     it('throws a clear error when --wait-for times out', async () => {

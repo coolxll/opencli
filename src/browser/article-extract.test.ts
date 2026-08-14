@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildExtractArticleJs,
+  buildExtractArticleFromHtmlJs,
   extractArticle,
   DEFAULT_FALLBACK_SELECTORS,
   type ExtractedArticle,
@@ -48,7 +49,7 @@ describe('buildExtractArticleJs', () => {
 
   it('runs fallback selection against the cleaned clone', () => {
     const js = buildExtractArticleJs({ cleanSelectors: ['.noise'] });
-    expect(js).toContain('el = cloneDoc.querySelector(sel);');
+    expect(js).toContain('el = cloneDoc.querySelector(selector);');
     expect(js).not.toContain('el = document.querySelector(sel);');
   });
 
@@ -62,6 +63,13 @@ describe('buildExtractArticleJs', () => {
       cleanSelectors: ['.a', '.b'],
       fallbackSelectors: ['main', 'body'],
     }))).not.toThrow();
+  });
+
+  it('can evaluate supplied HTML with a base URL in the page context', () => {
+    const js = buildExtractArticleFromHtmlJs('<article><p>Hello.</p></article>', 'https://example.com/a');
+    expect(js).toContain('https://example.com/a');
+    expect(js).toContain('const sourceHtml =');
+    expect(() => new Function(js)).not.toThrow();
   });
 });
 

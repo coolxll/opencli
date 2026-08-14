@@ -32,6 +32,7 @@ import { DEFAULT_TTL_MS, findEntry, loadNetworkCache, saveNetworkCache, type Cac
 import { NETWORK_INTERCEPTOR_JS } from './browser/network-interceptor.js';
 import { parseFilter, shapeMatchesFilter } from './browser/shape-filter.js';
 import { buildHtmlTreeJs, type HtmlTreeResult } from './browser/html-tree.js';
+import { buildExtractArticleJs } from './browser/article-extract.js';
 import { buildExtractHtmlJs, runExtractFromHtml } from './browser/extract.js';
 import { analyzeSite, type PageSignals } from './browser/analyze.js';
 import { registerAuthCommands } from './commands/auth.js';
@@ -2631,9 +2632,10 @@ Examples:
       const start = Number.parseInt(rawStart, 10);
       const selector = typeof opts.selector === 'string' && opts.selector.length > 0 ? opts.selector : null;
 
-      const js = buildExtractHtmlJs(selector);
+      const js = selector ? buildExtractHtmlJs(selector) : buildExtractArticleJs();
       const res = await page.evaluate(js) as
         | { ok: true; url: string; title: string; html: string }
+        | { source: string; title?: string; html: string; quality?: import('./browser/article-extract.js').ExtractionQuality }
         | { invalidSelector: true; reason: string }
         | { notFound: true }
         | null;
@@ -2654,13 +2656,17 @@ Examples:
         return;
       }
 
+      const articleResult = 'source' in res ? res : null;
+      const pageUrl = articleResult ? String(await page.evaluate('location.href')) : '';
       const envelope = runExtractFromHtml({
         html: res.html,
-        url: res.url,
-        title: res.title,
+        url: articleResult ? pageUrl : ('url' in res ? res.url : ''),
+        title: res.title || '',
         selector,
         start,
         chunkSize,
+        ...(articleResult?.source ? { source: articleResult.source } : {}),
+        ...(articleResult?.quality ? { quality: articleResult.quality } : {}),
       });
       console.log(JSON.stringify(envelope, null, 2));
     }));
