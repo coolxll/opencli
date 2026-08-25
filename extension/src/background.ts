@@ -138,14 +138,24 @@ async function connectAttempt(): Promise<void> {
   if (isDaemonSocketActive()) return;
 
   try {
-    const res = await fetch(DAEMON_PING_URL, { signal: AbortSignal.timeout(1000) });
+    // omit credentials so the browser doesn't attach the localhost cookie jar —
+    // a large jar can push the request past Node's default header limit and make
+    // the daemon answer 431, silently wedging the connect loop forever.
+    const res = await fetch(DAEMON_PING_URL, {
+      signal: AbortSignal.timeout(1000),
+      credentials: 'omit',
+    });
     if (!res.ok) {
+      console.warn(`[opencli] daemon ping failed: HTTP ${res.status}`);
       scheduleReconnect();
       return; // unexpected response — not our daemon, but keep polling.
     }
     // Daemon is reachable — proceed straight to the WebSocket below.
     reconnectAttempts = 0;
   } catch {
+    // Daemon not running is the expected idle state — keep the probe silent to
+    // avoid per-poll service-worker noise (see connect() docstring). The 431
+    // wedge this fixes is surfaced in the !res.ok branch above.
     scheduleReconnect();
     return; // daemon not running — keep polling until the next daemon spawn.
   }
@@ -1771,6 +1781,19 @@ async function handleFrames(cmd: Command, leaseKey: string): Promise<Result> {
   } catch (err) {
     return errorResult(cmd.id, err);
   }
+}
+
+function preferOwnedTab(leaseKey: string, tabId: number): void {
+  const session = automationSessions.get(leaseKey);
+  if (!session?.owned) return;
+  setLeaseSession(leaseKey, {
+    session: session.session,
+    surface: session.surface,
+    kind: session.kind,
+    windowId: session.windowId,
+    owned: true,
+    preferredTabId: tabId,
+  });
 }
 
 async function handleNavigate(cmd: Command, leaseKey: string): Promise<Result> {

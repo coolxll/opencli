@@ -28,7 +28,6 @@ import { isIgnorableDaemonPortEnv, unsupportedDaemonPortEnvMessage } from './con
 maybeRelaunchWithEnvProxy();
 
 const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 // Adapters are JS-first and live at <package-root>/clis/.
 // Use findPackageRoot so the path works both in dev (src/main.ts) and prod (dist/src/main.js).
 const BUILTIN_CLIS = path.join(findPackageRoot(__filename), 'clis');
@@ -92,10 +91,12 @@ if (getCompIdx !== -1) {
     }
     if (cursor === undefined) cursor = words.length;
     const candidates = getCompletionsFromManifest(words, cursor, manifestPaths);
-    process.stdout.write(candidates.join('\n') + '\n');
-    process.exit(EXIT_CODES.SUCCESS);
+    if (candidates !== null) {
+      process.stdout.write(candidates.join('\n') + '\n');
+      process.exit(EXIT_CODES.SUCCESS);
+    }
   }
-  // No manifest — fall through to full discovery path below
+  // Manifest unavailable or invalid — fall through to full discovery below.
 }
 
 // ── Full startup path ───────────────────────────────────────────────────

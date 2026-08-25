@@ -18,11 +18,8 @@ import type { BrowserCookie, BrowserEvaluateFunction, IPage, ScreenshotOptions, 
 import type { IBrowserFactory } from '../runtime.js';
 import { wrapForEval, buildEvaluateExpression } from './utils.js';
 import { generateSnapshotJs, scrollToRefJs, getFormStateJs } from './dom-snapshot.js';
-import { BasePage } from './base-page.js';
 import { generateStealthJs } from './stealth.js';
 import {
-  clickJs,
-  typeTextJs,
   pressKeyJs,
   waitForTextJs,
   scrollJs,
@@ -32,6 +29,9 @@ import {
   waitForCaptureJs,
   waitForSelectorJs,
 } from './dom-helpers.js';
+import { isRecord, saveBase64ToFile } from '../utils.js';
+import { getAllElectronApps } from '../electron-apps.js';
+import { CDPBasePage } from './base-page.js';
 
 export interface CDPTarget {
   targetId?: string;
@@ -291,7 +291,7 @@ export class CDPBridge implements IBrowserFactory {
   }
 }
 
-class CDPPage extends BasePage {
+class CDPPage extends CDPBasePage {
   private _pageEnabled = false;
 
   // Network capture state (mirrors extension/src/cdp.ts NetworkCaptureEntry shape)
@@ -606,43 +606,9 @@ class CDPPage extends BasePage {
     return this.bridge.send(method, params);
   }
 
-  async handleJavaScriptDialog(accept: boolean, promptText?: string): Promise<void> {
-    await this.cdp('Page.handleJavaScriptDialog', {
-      accept,
-      ...(promptText !== undefined && { promptText }),
-    });
-  }
-
-  async nativeClick(x: number, y: number): Promise<void> {
-    await this.cdp('Input.dispatchMouseEvent', {
-      type: 'mouseMoved',
-      x,
-      y,
-    });
-    await this.cdp('Input.dispatchMouseEvent', {
-      type: 'mousePressed',
-      x,
-      y,
-      button: 'left',
-      clickCount: 1,
-    });
-    await this.cdp('Input.dispatchMouseEvent', {
-      type: 'mouseReleased',
-      x,
-      y,
-      button: 'left',
-      clickCount: 1,
-    });
-  }
-
-  async nativeType(text: string): Promise<void> {
-    await this.cdp('Input.insertText', { text });
-  }
-
   async insertText(text: string): Promise<void> {
     await this.nativeType(text);
   }
-
   async nativeKeyPress(key: string, modifiers: string[] = []): Promise<void> {
     let modifierFlags = 0;
     for (const mod of modifiers) {
@@ -691,8 +657,6 @@ class CDPPage extends BasePage {
     await this.evaluate(waitForCaptureJs(maxMs));
   }
 }
-
-import { isRecord, saveBase64ToFile } from '../utils.js';
 
 function isCookie(value: unknown): value is BrowserCookie {
   return isRecord(value)
@@ -973,11 +937,31 @@ function selectBrowserAttachTarget(targets: CDPTarget[]): CDPTarget | undefined 
 function selectCDPTarget(targets: CDPTarget[]): CDPTarget | undefined {
   const preferredPattern = compilePreferredPattern(process.env.OPENCLI_CDP_TARGET);
 
-  const ranked = targets
+  const candidates = targets
     .map((target, index) => ({ target, index, score: scoreCDPTarget(target, preferredPattern) }))
-    .filter(({ score }) => Number.isFinite(score))
+    .filter(({ score }) => Number.isFinite(score));
+
+  // Electron apps route auxiliary windows onto the main document through a
+  // query: Codex ships its avatar overlay as
+  // `app://-/index.html?initialRoute=%2Favatar-overlay`, which answers `/json`
+  // first and scores exactly like the main window, so document order used to
+  // send every command to a surface with no app UI (#2242). Only break that
+  // tie; a routed window that outscores its plain sibling is still the better
+  // target, and on http(s) a query is ordinary page state.
+  const plainDocuments = new Set<string>();
+  for (const { target } of candidates) {
+    const url = parseLocalDocumentUrl(target.url);
+    if (url && !url.search) plainDocuments.add(toDocumentKey(url));
+  }
+
+  const ranked = candidates
+    .map((entry) => {
+      const url = parseLocalDocumentUrl(entry.target.url);
+      return { ...entry, routed: !!url && !!url.search && plainDocuments.has(toDocumentKey(url)) };
+    })
     .sort((a, b) => {
       if (b.score !== a.score) return b.score - a.score;
+      if (a.routed !== b.routed) return a.routed ? 1 : -1;
       return a.index - b.index;
     });
 
@@ -1027,6 +1011,32 @@ function scoreCDPTarget(target: CDPTarget, preferredPattern?: RegExp): number {
   if (url.includes('discord')) score += 100;
 
   return score;
+}
+
+// Keep this explicit: these are the schemes Electron serves a shared local
+// document over, where a query is a window route (#2242). A "not http(s)"
+// check would also sweep in schemes we know nothing about.
+const LOCAL_DOCUMENT_SCHEMES = new Set(['app:', 'file:']);
+
+/**
+ * Parse a URL that names a local app document eligible for routed-window
+ * demotion (#2242).
+ *
+ * Only allowlisted schemes qualify: on http(s), and on any scheme we cannot
+ * vouch for, a query is ordinary page state, so returning null there keeps
+ * plain document-order selection.
+ */
+function parseLocalDocumentUrl(raw: string | undefined): URL | null {
+  try {
+    const url = new URL(raw ?? '');
+    return LOCAL_DOCUMENT_SCHEMES.has(url.protocol) ? url : null;
+  } catch {
+    return null;
+  }
+}
+
+function toDocumentKey(url: URL): string {
+  return `${url.protocol}//${url.host}${url.pathname}`;
 }
 
 function compilePreferredPattern(raw: string | undefined): RegExp | undefined {

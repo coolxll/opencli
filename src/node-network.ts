@@ -1,5 +1,7 @@
 import { Agent, EnvHttpProxyAgent, fetch as undiciFetch, type Dispatcher } from 'undici';
 
+import { URL } from 'node:url';
+
 const LOOPBACK_NO_PROXY_ENTRIES = ['127.0.0.1', 'localhost', '::1'];
 
 type ProxyEnvKey =
@@ -185,10 +187,10 @@ export function decideProxy(url: URL, env: NodeJS.ProcessEnv = process.env): Pro
   return { mode: 'proxy', proxyUrl };
 }
 
-export function getDispatcherForUrl(url: URL, env: NodeJS.ProcessEnv = process.env): Dispatcher {
+export function getNetworkDispatcher(url?: URL, env: NodeJS.ProcessEnv = process.env): Dispatcher {
   const config = resolveProxyConfig(env);
   if (!config.httpProxy && !config.httpsProxy) return directDispatcher;
-  const decision = decideProxy(url, env);
+  const decision = url ? decideProxy(url, env) : { mode: 'proxy' as const };
   if (decision.mode === 'direct') return directDispatcher;
   return createProxyDispatcher(config);
 }
@@ -201,7 +203,7 @@ export async function fetchWithNodeNetwork(input: RequestInfo | URL, init: Reque
 
   return (await undiciFetch(input as Parameters<typeof undiciFetch>[0], {
     ...init,
-    dispatcher: getDispatcherForUrl(url),
+    dispatcher: getNetworkDispatcher(url),
   } as Parameters<typeof undiciFetch>[1])) as unknown as Response;
 }
 
