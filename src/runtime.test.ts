@@ -1,12 +1,25 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { extractBrowserEnvOverrides, withBrowserEnvOverrides } from './runtime.js';
+import { BrowserBridge, CDPBridge } from './browser/index.js';
+import { extractBrowserEnvOverrides, getBrowserFactory, withBrowserEnvOverrides } from './runtime.js';
 
-describe('browser env overrides', () => {
-  beforeEach(() => {
+describe('getBrowserFactory', () => {
+  afterEach(() => {
     vi.unstubAllEnvs();
   });
 
-  afterEach(() => {
+  it('uses BrowserBridge for regular sites by default', () => {
+    expect(getBrowserFactory()).toBe(BrowserBridge);
+  });
+
+  it('uses CDPBridge when OPENCLI_CDP_ENDPOINT is configured', () => {
+    vi.stubEnv('OPENCLI_CDP_ENDPOINT', 'http://127.0.0.1:9333');
+
+    expect(getBrowserFactory()).toBe(CDPBridge);
+  });
+});
+
+describe('browser env overrides', () => {
+  beforeEach(() => {
     vi.unstubAllEnvs();
   });
 

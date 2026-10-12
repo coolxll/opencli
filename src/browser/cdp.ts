@@ -1,5 +1,5 @@
 /**
- * CDP client — implements IPage by connecting directly to a Chrome/Electron CDP WebSocket.
+ * CDP client — implements IPage by connecting directly to a Chrome CDP WebSocket.
  *
  * Fixes applied:
  * - send() now has a 30s timeout guard (P0 #4)
@@ -30,7 +30,7 @@ import {
   waitForSelectorJs,
 } from './dom-helpers.js';
 import { isRecord, saveBase64ToFile } from '../utils.js';
-import { getAllElectronApps } from '../electron-apps.js';
+import { CommandExecutionError } from '../errors.js';
 import { CDPBasePage } from './base-page.js';
 
 export interface CDPTarget {
@@ -62,6 +62,7 @@ const PERSISTENT_TARGET_REGISTRY_PATH = path.join(os.tmpdir(), 'opencli-cdp-targ
 // surface `responseBodyFullSize` + `responseBodyTruncated` so downstream layers
 // can tell the agent what happened instead of lying about the payload.
 export const CDP_RESPONSE_BODY_CAPTURE_LIMIT = 8 * 1024 * 1024;
+export const CDP_REQUEST_BODY_CAPTURE_LIMIT = 1 * 1024 * 1024;
 
 export class CDPBridge implements IBrowserFactory {
   private _ws: WebSocket | null = null;
@@ -299,6 +300,11 @@ class CDPPage extends CDPBasePage {
   private _networkCapturePattern = '';
   private _networkEntries: Array<{
     url: string; method: string; responseStatus?: number;
+    requestHeaders?: Record<string, string>;
+    requestBodyKind?: string;
+    requestBodyPreview?: string;
+    requestBodyFullSize?: number;
+    requestBodyTruncated?: boolean;
     responseContentType?: string;
     responsePreview?: string;
     responseBodyFullSize?: number;
@@ -356,8 +362,15 @@ class CDPPage extends CDPBasePage {
   }
 
   async getCookies(opts: { domain?: string; url?: string } = {}): Promise<BrowserCookie[]> {
-    const result = await this.bridge.send('Network.getCookies', opts.url ? { urls: [opts.url] } : {});
-    const cookies = isRecord(result) && Array.isArray(result.cookies) ? result.cookies : [];
+    // Network.getCookies without URLs is scoped to the current page, which may
+    // be on another site during a no-navigation auth check.
+    const result = opts.url
+      ? await this.bridge.send('Network.getCookies', { urls: [opts.url] })
+      : await this.bridge.send('Storage.getCookies', {});
+    if (!isRecord(result) || !Array.isArray(result.cookies) || !result.cookies.every(isCookie)) {
+      throw new CommandExecutionError('CDP returned an invalid cookies response');
+    }
+    const cookies = result.cookies;
     const domain = opts.domain;
     return domain
       ? cookies.filter((cookie): cookie is BrowserCookie => isCookie(cookie) && matchesCookieDomain(cookie.domain, domain))
@@ -500,14 +513,51 @@ class CDPPage extends CDPBasePage {
 
       // Step 1: Record request method/url on requestWillBeSent
       this.bridge.on('Network.requestWillBeSent', (params: unknown) => {
-        const p = params as { requestId: string; request: { method: string; url: string }; timestamp: number };
+        const p = params as {
+          requestId: string;
+          request: {
+            method: string;
+            url: string;
+            headers?: Record<string, unknown>;
+            postData?: string;
+            hasPostData?: boolean;
+          };
+          timestamp: number;
+        };
         if (!this._networkCapturePattern || p.request.url.includes(this._networkCapturePattern)) {
+          const rawBody = typeof p.request.postData === 'string' ? p.request.postData : '';
+          const bodyTruncated = rawBody.length > CDP_REQUEST_BODY_CAPTURE_LIMIT;
           const idx = this._networkEntries.push({
             url: p.request.url,
             method: p.request.method,
+            requestHeaders: Object.fromEntries(
+              Object.entries(p.request.headers ?? {}).map(([name, value]) => [name, String(value)]),
+            ),
+            requestBodyKind: p.request.hasPostData ? 'string' : 'empty',
+            requestBodyPreview: bodyTruncated ? rawBody.slice(0, CDP_REQUEST_BODY_CAPTURE_LIMIT) : rawBody,
+            requestBodyFullSize: rawBody.length,
+            requestBodyTruncated: bodyTruncated,
             timestamp: Date.now(),
           }) - 1;
           this._pendingRequests.set(p.requestId, idx);
+
+          if (p.request.hasPostData && p.request.postData === undefined) {
+            const requestBodyFetch = this.bridge.send('Network.getRequestPostData', { requestId: p.requestId }).then((result: unknown) => {
+              const postData = (result as { postData?: string } | undefined)?.postData;
+              if (typeof postData !== 'string') return;
+              const truncated = postData.length > CDP_REQUEST_BODY_CAPTURE_LIMIT;
+              this._networkEntries[idx].requestBodyPreview = truncated
+                ? postData.slice(0, CDP_REQUEST_BODY_CAPTURE_LIMIT)
+                : postData;
+              this._networkEntries[idx].requestBodyFullSize = postData.length;
+              this._networkEntries[idx].requestBodyTruncated = truncated;
+            }).catch(() => {
+              // Some request types do not expose post data.
+            }).finally(() => {
+              this._pendingBodyFetches.delete(requestBodyFetch);
+            });
+            this._pendingBodyFetches.add(requestBodyFetch);
+          }
         }
       });
 
@@ -669,7 +719,7 @@ function matchesCookieDomain(cookieDomain: string, targetDomain: string): boolea
   const normalizedCookieDomain = cookieDomain.replace(/^\./, '').toLowerCase();
   const normalizedTargetDomain = targetDomain.replace(/^\./, '').toLowerCase();
   return normalizedTargetDomain === normalizedCookieDomain
-    || normalizedTargetDomain.endsWith(`.${normalizedCookieDomain}`);
+    || normalizedCookieDomain.endsWith(`.${normalizedTargetDomain}`);
 }
 
 async function resolveConnectionEndpoint(
@@ -936,36 +986,10 @@ function selectBrowserAttachTarget(targets: CDPTarget[]): CDPTarget | undefined 
 
 function selectCDPTarget(targets: CDPTarget[]): CDPTarget | undefined {
   const preferredPattern = compilePreferredPattern(process.env.OPENCLI_CDP_TARGET);
-
-  const candidates = targets
+  return targets
     .map((target, index) => ({ target, index, score: scoreCDPTarget(target, preferredPattern) }))
-    .filter(({ score }) => Number.isFinite(score));
-
-  // Electron apps route auxiliary windows onto the main document through a
-  // query: Codex ships its avatar overlay as
-  // `app://-/index.html?initialRoute=%2Favatar-overlay`, which answers `/json`
-  // first and scores exactly like the main window, so document order used to
-  // send every command to a surface with no app UI (#2242). Only break that
-  // tie; a routed window that outscores its plain sibling is still the better
-  // target, and on http(s) a query is ordinary page state.
-  const plainDocuments = new Set<string>();
-  for (const { target } of candidates) {
-    const url = parseLocalDocumentUrl(target.url);
-    if (url && !url.search) plainDocuments.add(toDocumentKey(url));
-  }
-
-  const ranked = candidates
-    .map((entry) => {
-      const url = parseLocalDocumentUrl(entry.target.url);
-      return { ...entry, routed: !!url && !!url.search && plainDocuments.has(toDocumentKey(url)) };
-    })
-    .sort((a, b) => {
-      if (b.score !== a.score) return b.score - a.score;
-      if (a.routed !== b.routed) return a.routed ? 1 : -1;
-      return a.index - b.index;
-    });
-
-  return ranked[0]?.target;
+    .filter(({ score }) => Number.isFinite(score))
+    .sort((a, b) => b.score - a.score || a.index - b.index)[0]?.target;
 }
 
 function scoreCDPTarget(target: CDPTarget, preferredPattern?: RegExp): number {
@@ -984,14 +1008,9 @@ function scoreCDPTarget(target: CDPTarget, preferredPattern?: RegExp): number {
 
   if (preferredPattern && preferredPattern.test(haystack)) score += 1000;
 
-  if (type === 'app') score += 120;
-  else if (type === 'webview') score += 100;
-  else if (type === 'page') score += 80;
+  if (type === 'page') score += 80;
   else if (type === 'iframe') score += 20;
 
-  if (url.startsWith('http://localhost') || url.startsWith('https://localhost')) score += 90;
-  if (url.startsWith('file://')) score += 60;
-  if (url.startsWith('http://127.0.0.1') || url.startsWith('https://127.0.0.1')) score += 50;
   if (url.startsWith('about:blank')) score -= 120;
   if (url === '' || url === 'about:blank') score -= 40;
 
@@ -1010,33 +1029,8 @@ function scoreCDPTarget(target: CDPTarget, preferredPattern?: RegExp): number {
   if (url.includes('notion')) score += 100;
   if (url.includes('discord')) score += 100;
 
+
   return score;
-}
-
-// Keep this explicit: these are the schemes Electron serves a shared local
-// document over, where a query is a window route (#2242). A "not http(s)"
-// check would also sweep in schemes we know nothing about.
-const LOCAL_DOCUMENT_SCHEMES = new Set(['app:', 'file:']);
-
-/**
- * Parse a URL that names a local app document eligible for routed-window
- * demotion (#2242).
- *
- * Only allowlisted schemes qualify: on http(s), and on any scheme we cannot
- * vouch for, a query is ordinary page state, so returning null there keeps
- * plain document-order selection.
- */
-function parseLocalDocumentUrl(raw: string | undefined): URL | null {
-  try {
-    const url = new URL(raw ?? '');
-    return LOCAL_DOCUMENT_SCHEMES.has(url.protocol) ? url : null;
-  } catch {
-    return null;
-  }
-}
-
-function toDocumentKey(url: URL): string {
-  return `${url.protocol}//${url.host}${url.pathname}`;
 }
 
 function compilePreferredPattern(raw: string | undefined): RegExp | undefined {
