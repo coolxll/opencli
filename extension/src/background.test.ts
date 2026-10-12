@@ -675,7 +675,7 @@ describe('background tab isolation', () => {
     vi.stubGlobal('chrome', chrome);
 
     const mod = await import('./background');
-    mod.__test__.setSession(adapterKey('twitter'), { windowId: 1, owned: true, preferredTabId: 10 });
+    mod.__test__.setSession(adapterKey('twitter'), { windowId: 1, owned: true, preferredTabId: 10, ownedTabIds: [1, 10] });
 
     const result = await mod.__test__.handleTabs(
       { id: 'close-old', action: 'tabs', op: 'close', session: adapterKey('twitter'), page: 'target-1' },
@@ -702,13 +702,18 @@ describe('background tab isolation', () => {
     const mod = await import('./background');
     mod.__test__.setSession(adapterKey('twitter'), { windowId: 1, owned: true, preferredTabId: 1 });
 
-    const result = await mod.__test__.handleTabs(
-      { id: 'reject-close', action: 'tabs', op: 'close', session: adapterKey('twitter'), page },
-      adapterKey('twitter'),
-    );
+    const result = await mod.__test__.handleCommand({
+      id: 'reject-close',
+      action: 'tabs',
+      op: 'close',
+      session: 'twitter',
+      surface: 'adapter',
+      page,
+    });
 
     expect(result).toEqual(expect.objectContaining({ id: 'reject-close', ok: false }));
     expect(chrome.tabs.remove).not.toHaveBeenCalled();
+    expect(chrome.windows.remove).not.toHaveBeenCalled();
     expect(chrome.tabs.update).not.toHaveBeenCalledWith(1, { url: 'about:blank', active: true });
     expect(mod.__test__.getSession(adapterKey('twitter'))?.preferredTabId).toBe(1);
   });
@@ -726,7 +731,9 @@ describe('background tab isolation', () => {
     );
 
     expect(result).toEqual({ id: 'implicit-close', ok: true, data: { closed: 'target-1' } });
-    expect(chrome.tabs.update).toHaveBeenCalledWith(1, { url: 'about:blank', active: true });
+    expect(chrome.tabs.remove).toHaveBeenCalledWith(1);
+    expect(chrome.windows.remove).toHaveBeenCalledWith(1);
+    expect(chrome.tabs.update).not.toHaveBeenCalledWith(1, { url: 'about:blank', active: true });
     expect(mod.__test__.getSession(adapterKey('twitter'))).toBeNull();
   });
 
@@ -736,7 +743,7 @@ describe('background tab isolation', () => {
     vi.stubGlobal('chrome', chrome);
 
     const mod = await import('./background');
-    mod.__test__.setSession(adapterKey('twitter'), { windowId: 1, owned: true, preferredTabId: 10 });
+    mod.__test__.setSession(adapterKey('twitter'), { windowId: 1, owned: true, preferredTabId: 10, ownedTabIds: [1, 10] });
 
     const result = await mod.__test__.handleTabs(
       { id: 'restore-old', action: 'tabs', op: 'select', session: adapterKey('twitter'), page: 'target-1' },
