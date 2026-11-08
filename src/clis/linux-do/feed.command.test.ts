@@ -128,6 +128,6 @@ describe('linux-do feed command', () => {
     expect(page.goto).toHaveBeenCalledWith('https://linux.do');
     expect(page.wait).toHaveBeenCalledWith(2);
     expect(page.evaluate).toHaveBeenCalledTimes(1);
-    expect(String(page.evaluate.mock.calls[0][0])).toContain('/tags/c/develop/4/chatgpt/3/l/top.json?per_page=5&period=monthly');
+    expect(String(page.evaluate.mock.calls[0][0])).toContain('/tags/c/develop/4/chatgpt/3/l/top.json?per_page=10&period=monthly');
   });
 });

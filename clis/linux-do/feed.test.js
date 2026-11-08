@@ -59,7 +59,7 @@ describe('linux-do feed metadata resolution', () => {
             view: 'latest',
             limit: 20,
         });
-        expect(request.url).toBe('/latest.json?per_page=20');
+        expect(request.url).toBe('/latest.json?per_page=40');
     });
     it('filters pinned topics by default and can include them explicitly', () => {
         const data = {
@@ -80,7 +80,7 @@ describe('linux-do feed metadata resolution', () => {
             period: 'weekly',
             limit: 20,
         });
-        expect(request.url).toBe('/top.json?per_page=20&period=weekly');
+        expect(request.url).toBe('/top.json?per_page=40&period=weekly');
     });
     it('prefers live tag metadata over the bundled snapshot', async () => {
         __test__.setLiveMetadataForTests({
@@ -91,7 +91,7 @@ describe('linux-do feed metadata resolution', () => {
             view: 'latest',
             limit: 20,
         });
-        expect(request.url).toBe('/tag/fresh-tag/9999.json?per_page=20');
+        expect(request.url).toBe('/tag/fresh-tag/9999.json?per_page=40');
     });
     it('uses live category metadata with parent paths for subcategories', async () => {
         __test__.setLiveMetadataForTests({
@@ -125,7 +125,7 @@ describe('linux-do feed metadata resolution', () => {
             view: 'hot',
             limit: 20,
         });
-        expect(request.url).toBe('/c/parent/fresh-child/11/l/hot.json?per_page=20');
+        expect(request.url).toBe('/c/parent/fresh-child/11/l/hot.json?per_page=40');
     });
     it('accepts parent/name category paths for subcategories', async () => {
         __test__.setLiveMetadataForTests({
@@ -159,7 +159,7 @@ describe('linux-do feed metadata resolution', () => {
             view: 'latest',
             limit: 20,
         });
-        expect(request.url).toBe('/c/parent/fresh-child/11.json?per_page=20');
+        expect(request.url).toBe('/c/parent/fresh-child/11.json?per_page=40');
     });
     it('builds the replacement URL for legacy category id', async () => {
         __test__.setLiveMetadataForTests({
@@ -179,7 +179,7 @@ describe('linux-do feed metadata resolution', () => {
             view: 'latest',
             limit: 20,
         });
-        expect(request.url).toBe('/c/develop/4.json?per_page=20');
+        expect(request.url).toBe('/c/develop/4.json?per_page=40');
     });
     it('falls back to cached metadata when live metadata is unavailable', async () => {
         const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), 'opencli-linux-do-cache-'));
@@ -207,7 +207,52 @@ describe('linux-do feed metadata resolution', () => {
             limit: 20,
         });
         expect(request.url).toContain('/tags/c/develop/4/chatgpt/3/l/top.json');
-        expect(request.url).toContain('per_page=20');
+        expect(request.url).toContain('per_page=40');
         expect(request.url).toContain('period=monthly');
+    });
+
+    describe('feed limit and pinned buffering', () => {
+        it('buffers per_page when includePinned is false (default)', async () => {
+            const reqSmall = await __test__.resolveFeedRequest(null, { view: 'latest', limit: 3 });
+            expect(reqSmall.url).toBe('/latest.json?per_page=8');
+
+            const reqMid = await __test__.resolveFeedRequest(null, { view: 'latest', limit: 20 });
+            expect(reqMid.url).toBe('/latest.json?per_page=40');
+
+            const reqLarge = await __test__.resolveFeedRequest(null, { view: 'latest', limit: 60 });
+            expect(reqLarge.url).toBe('/latest.json?per_page=100');
+        });
+
+        it('uses exact limit when includePinned is true', async () => {
+            const reqSmall = await __test__.resolveFeedRequest(null, { view: 'latest', limit: 3, 'include-pinned': true });
+            expect(reqSmall.url).toBe('/latest.json?per_page=3');
+
+            const reqMid = await __test__.resolveFeedRequest(null, { view: 'latest', limit: 20, 'include-pinned': true });
+            expect(reqMid.url).toBe('/latest.json?per_page=20');
+        });
+
+        it('slices exactly to requested limit after filtering pinned topics', () => {
+            const data = {
+                topic_list: {
+                    topics: [
+                        { id: 1, title: 'Pinned 1', pinned: true },
+                        { id: 2, title: 'Pinned 2', pinned: true },
+                        { id: 3, title: 'Pinned 3', pinned: true },
+                        { id: 4, title: 'Regular 1', pinned: false },
+                        { id: 5, title: 'Regular 2', pinned: false },
+                        { id: 6, title: 'Regular 3', pinned: false },
+                        { id: 7, title: 'Regular 4', pinned: false },
+                    ],
+                },
+            };
+
+            const unpinned = __test__.topicListRichFromJson(data, 3, false);
+            expect(unpinned).toHaveLength(3);
+            expect(unpinned.map(t => t.title)).toEqual(['Regular 1', 'Regular 2', 'Regular 3']);
+
+            const pinned = __test__.topicListRichFromJson(data, 3, true);
+            expect(pinned).toHaveLength(3);
+            expect(pinned.map(t => t.title)).toEqual(['Pinned 1', 'Pinned 2', 'Pinned 3']);
+        });
     });
 });

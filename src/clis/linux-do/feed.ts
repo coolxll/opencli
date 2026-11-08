@@ -414,7 +414,14 @@ async function resolveFeedRequest(page: IPage | null, kwargs: Record<string, any
   const params = new URLSearchParams();
   if (kwargs.order && kwargs.order !== 'default') params.set('order', kwargs.order as string);
   if (kwargs.ascending) params.set('ascending', 'true');
-  if (kwargs.limit) params.set('per_page', String(kwargs.limit));
+  if (kwargs.limit) {
+    const includePinned = kwargs['include-pinned'] === true || kwargs.includePinned === true;
+    const requestedLimit = Number(kwargs.limit) || 20;
+    const perPage = includePinned
+      ? requestedLimit
+      : Math.min(Math.max(requestedLimit + 5, requestedLimit * 2), 100);
+    params.set('per_page', String(perPage));
+  }
   const tagValue = typeof kwargs.tag === 'string' ? kwargs.tag.trim() : '';
   const categoryValue = typeof kwargs.category === 'string' ? kwargs.category.trim() : '';
 

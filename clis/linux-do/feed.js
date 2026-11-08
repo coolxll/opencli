@@ -294,8 +294,14 @@ async function resolveFeedRequest(page, kwargs) {
         params.set('order', kwargs.order);
     if (kwargs.ascending)
         params.set('ascending', 'true');
-    if (kwargs.limit)
-        params.set('per_page', String(kwargs.limit));
+    if (kwargs.limit) {
+        const includePinned = kwargs['include-pinned'] === true || kwargs.includePinned === true;
+        const requestedLimit = Number(kwargs.limit) || 20;
+        const perPage = includePinned
+            ? requestedLimit
+            : Math.min(Math.max(requestedLimit + 5, requestedLimit * 2), 100);
+        params.set('per_page', String(perPage));
+    }
     const tagValue = typeof kwargs.tag === 'string' ? kwargs.tag.trim() : '';
     const categoryValue = typeof kwargs.category === 'string' ? kwargs.category.trim() : '';
     if (!tagValue && !categoryValue) {
