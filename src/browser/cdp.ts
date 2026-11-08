@@ -11,30 +11,17 @@
 import { WebSocket, type RawData } from 'ws';
 import { request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
-import * as fs from 'node:fs';
-import * as os from 'node:os';
-import * as path from 'node:path';
-import type { BrowserCookie, BrowserEvaluateFunction, IPage, ScreenshotOptions, SnapshotOptions, WaitOptions } from '../types.js';
+import { readFileSync, statSync } from 'node:fs';
+import type { BrowserCookie, BrowserEvaluateFunction, IPage, ScreenshotOptions } from '../types.js';
 import type { IBrowserFactory } from '../runtime.js';
-import { wrapForEval, buildEvaluateExpression } from './utils.js';
-import { generateSnapshotJs, scrollToRefJs, getFormStateJs } from './dom-snapshot.js';
+import { buildEvaluateExpression } from './utils.js';
 import { generateStealthJs } from './stealth.js';
-import {
-  pressKeyJs,
-  waitForTextJs,
-  scrollJs,
-  autoScrollJs,
-  networkRequestsJs,
-  waitForDomStableJs,
-  waitForCaptureJs,
-  waitForSelectorJs,
-} from './dom-helpers.js';
+import { waitForDomStableJs } from './dom-helpers.js';
 import { isRecord, saveBase64ToFile } from '../utils.js';
 import { CommandExecutionError } from '../errors.js';
 import { CDPBasePage } from './base-page.js';
 
 export interface CDPTarget {
-  targetId?: string;
   type?: string;
   url?: string;
   title?: string;
@@ -52,9 +39,7 @@ interface RuntimeEvaluateResult {
   };
 }
 
-const CDP_SEND_TIMEOUT = 30_000; // 30s per command
-const CDP_CLOSE_TIMEOUT = 1_500;
-const PERSISTENT_TARGET_REGISTRY_PATH = path.join(os.tmpdir(), 'opencli-cdp-targets.json');
+const CDP_SEND_TIMEOUT = 30_000;
 
 // Memory guard for in-process capture. The 4k cap we used to apply everywhere
 // silently truncated JSON so `JSON.parse` failed or gave partial objects — the
@@ -66,23 +51,35 @@ export const CDP_REQUEST_BODY_CAPTURE_LIMIT = 1 * 1024 * 1024;
 
 export class CDPBridge implements IBrowserFactory {
   private _ws: WebSocket | null = null;
-  private _sessionId: string | null = null;
-  private _ownedTargetId: string | null = null;
-  private _closeOwnedTargetOnClose = false;
   private _idCounter = 0;
   private _pending = new Map<number, { resolve: (val: unknown) => void; reject: (err: Error) => void; timer: ReturnType<typeof setTimeout> }>();
   private _eventListeners = new Map<string, Set<(params: unknown) => void>>();
 
-  async connect(opts?: { timeout?: number; session?: string; cdpEndpoint?: string; contextId?: string; idleTimeout?: number; windowMode?: 'foreground' | 'background'; surface?: 'browser' | 'adapter'; siteSession?: 'ephemeral' | 'persistent'; workspace?: string }): Promise<IPage> {
+  async connect(opts?: { timeout?: number; session?: string; cdpEndpoint?: string; contextId?: string; idleTimeout?: number; windowMode?: 'foreground' | 'background'; surface?: 'browser' | 'adapter'; siteSession?: 'ephemeral' | 'persistent' }): Promise<IPage> {
     if (this._ws) throw new Error('CDPBridge is already connected. Call close() before reconnecting.');
 
-    const endpoint = process.env.OPENCLI_CDP_ENDPOINT;
-    if (!endpoint) throw new Error('OPENCLI_CDP_ENDPOINT is not set');
+    const endpoint = opts?.cdpEndpoint ?? process.env.OPENCLI_CDP_ENDPOINT;
+    if (!endpoint) throw new Error('CDP endpoint not provided (pass cdpEndpoint or set OPENCLI_CDP_ENDPOINT)');
 
-    const connection = await resolveConnectionEndpoint(endpoint);
+    // Validate before connecting: reading a FIFO synchronously could block forever.
+    const initPath = process.env.OPENCLI_CDP_INIT_SCRIPT;
+    if (initPath && !statSync(initPath).isFile()) {
+      throw new Error('OPENCLI_CDP_INIT_SCRIPT must point to a regular JavaScript file');
+    }
+    const initSource = initPath ? readFileSync(initPath, 'utf8') : undefined;
+
+    let wsUrl = endpoint;
+    if (endpoint.startsWith('http')) {
+      const targets = await fetchJsonDirect(`${endpoint.replace(/\/$/, '')}/json`) as CDPTarget[];
+      const target = selectCDPTarget(targets);
+      if (!target || !target.webSocketDebuggerUrl) {
+        throw new Error('No inspectable targets found at CDP endpoint');
+      }
+      wsUrl = target.webSocketDebuggerUrl;
+    }
 
     return new Promise((resolve, reject) => {
-      const ws = new WebSocket(connection.wsUrl);
+      const ws = new WebSocket(wsUrl);
       const timeoutMs = (opts?.timeout ?? 10) * 1000;
       const timeout = setTimeout(() => {
         this._ws = null;
@@ -91,26 +88,13 @@ export class CDPBridge implements IBrowserFactory {
       }, timeoutMs);
 
       ws.on('open', async () => {
+        clearTimeout(timeout);
+        this._ws = ws;
         try {
-          clearTimeout(timeout);
-          this._ws = ws;
-          if (connection.browserLevel) {
-            await this.attachToBrowserTarget({
-              preferNewTarget: connection.preferNewTarget,
-              workspace: normalizeWorkspaceKey(opts?.workspace),
-              endpointKey: endpoint,
-            });
-          }
-        } catch (err) {
-          await this.close().catch(() => {});
-          reject(err);
-          return;
-        }
-
-        try {
-          // Register stealth script to run before any page JS on every navigation.
           await this.send('Page.enable');
           await this.send('Page.addScriptToEvaluateOnNewDocument', { source: generateStealthJs() });
+          // Optional caller script for every new document, e.g. state a headless peer cannot share across connections.
+          if (initSource !== undefined) await this.send('Page.addScriptToEvaluateOnNewDocument', { source: initSource });
         } catch (err) {
           ws.close();
           reject(err instanceof Error ? err : new Error(String(err)));
@@ -127,7 +111,6 @@ export class CDPBridge implements IBrowserFactory {
       ws.on('message', (data: RawData) => {
         try {
           const msg = JSON.parse(data.toString());
-          // Handle command responses
           if (msg.id && this._pending.has(msg.id)) {
             const entry = this._pending.get(msg.id)!;
             clearTimeout(entry.timer);
@@ -138,11 +121,7 @@ export class CDPBridge implements IBrowserFactory {
               entry.resolve(msg.result);
             }
           }
-          // Handle CDP events
           if (msg.method) {
-            if (this._sessionId && msg.sessionId && msg.sessionId !== this._sessionId) {
-              return;
-            }
             const listeners = this._eventListeners.get(msg.method);
             if (listeners) {
               for (const fn of listeners) fn(msg.params);
@@ -159,32 +138,19 @@ export class CDPBridge implements IBrowserFactory {
   }
 
   async close(): Promise<void> {
-    if (this._ownedTargetId && this._closeOwnedTargetOnClose && this._ws && this._ws.readyState === WebSocket.OPEN) {
-      await this.send('Target.closeTarget', { targetId: this._ownedTargetId }, CDP_CLOSE_TIMEOUT, { root: true }).catch(() => {});
-    }
-    this._ownedTargetId = null;
-    this._closeOwnedTargetOnClose = false;
     if (this._ws) {
       this._ws.close();
       this._ws = null;
     }
-    this._sessionId = null;
     for (const p of this._pending.values()) {
       clearTimeout(p.timer);
       p.reject(new Error('CDP connection closed'));
     }
     this._pending.clear();
     this._eventListeners.clear();
-    this._idCounter = 0;
   }
 
-  /** Send a CDP command with timeout guard (P0 fix #4) */
-  async send(
-    method: string,
-    params: Record<string, unknown> = {},
-    timeoutMs: number = CDP_SEND_TIMEOUT,
-    opts: { root?: boolean } = {},
-  ): Promise<unknown> {
+  async send(method: string, params: Record<string, unknown> = {}, timeoutMs: number = CDP_SEND_TIMEOUT): Promise<unknown> {
     if (!this._ws || this._ws.readyState !== WebSocket.OPEN) {
       throw new Error('CDP connection is not open');
     }
@@ -195,27 +161,23 @@ export class CDPBridge implements IBrowserFactory {
         reject(new Error(`CDP command '${method}' timed out after ${timeoutMs / 1000}s`));
       }, timeoutMs);
       this._pending.set(id, { resolve, reject, timer });
-      const payload: Record<string, unknown> = { id, method, params };
-      if (this._sessionId && !opts.root) {
-        payload.sessionId = this._sessionId;
-      }
-      this._ws!.send(JSON.stringify(payload));
+      this._ws!.send(JSON.stringify({ id, method, params }));
     });
   }
 
-  /** Listen for a CDP event */
   on(event: string, handler: (params: unknown) => void): void {
     let set = this._eventListeners.get(event);
-    if (!set) { set = new Set(); this._eventListeners.set(event, set); }
+    if (!set) {
+      set = new Set();
+      this._eventListeners.set(event, set);
+    }
     set.add(handler);
   }
 
-  /** Remove a CDP event listener */
   off(event: string, handler: (params: unknown) => void): void {
     this._eventListeners.get(event)?.delete(handler);
   }
 
-  /** Wait for a CDP event to fire (one-shot) */
   waitForEvent(event: string, timeoutMs: number = 15_000): Promise<unknown> {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -230,66 +192,6 @@ export class CDPBridge implements IBrowserFactory {
       this.on(event, handler);
     });
   }
-
-  private async attachToBrowserTarget(opts: { preferNewTarget: boolean; workspace?: string; endpointKey: string }): Promise<void> {
-    let targetId: string | undefined;
-    const targetInfos = await this.listBrowserTargets();
-
-    if (hasExplicitTargetHint()) {
-      const hintedTarget = selectBrowserAttachTarget(targetInfos);
-      targetId = hintedTarget?.targetId;
-      if (targetId && opts.workspace) {
-        setPersistentTargetId(opts.endpointKey, opts.workspace, targetId);
-      }
-    } else if (opts.workspace) {
-      const storedTargetId = getPersistentTargetId(opts.endpointKey, opts.workspace);
-      const storedTarget = selectTargetById(targetInfos, storedTargetId);
-      if (storedTarget?.targetId) {
-        targetId = storedTarget.targetId;
-      } else if (storedTargetId) {
-        clearPersistentTargetId(opts.endpointKey, opts.workspace);
-      }
-    }
-
-    if (!targetId && opts.preferNewTarget) {
-      const created = await this.send('Target.createTarget', { url: 'about:blank' }, CDP_SEND_TIMEOUT, { root: true });
-      targetId = isRecord(created) && typeof created.targetId === 'string' ? created.targetId : undefined;
-      if (targetId) {
-        this._ownedTargetId = targetId;
-        this._closeOwnedTargetOnClose = !opts.workspace;
-        if (opts.workspace) {
-          setPersistentTargetId(opts.endpointKey, opts.workspace, targetId);
-        }
-      }
-    }
-
-    if (!targetId) {
-      const target = selectBrowserAttachTarget(targetInfos);
-      targetId = target?.targetId;
-    }
-
-    if (!targetId) {
-      throw new Error('No inspectable targets found at CDP endpoint');
-    }
-
-    await this.send('Target.activateTarget', { targetId }, CDP_SEND_TIMEOUT, { root: true }).catch(() => {});
-    const attachResult = await this.send('Target.attachToTarget', {
-      targetId,
-      flatten: true,
-    }, CDP_SEND_TIMEOUT, { root: true });
-    const sessionId = isRecord(attachResult) ? attachResult.sessionId : undefined;
-    if (typeof sessionId !== 'string' || !sessionId) {
-      throw new Error(`Failed to attach to CDP target '${targetId}'`);
-    }
-    this._sessionId = sessionId;
-  }
-
-  private async listBrowserTargets(): Promise<CDPTarget[]> {
-    const result = await this.send('Target.getTargets', {}, CDP_SEND_TIMEOUT, { root: true });
-    return isRecord(result) && Array.isArray(result.targetInfos)
-      ? result.targetInfos as CDPTarget[]
-      : [];
-  }
 }
 
 class CDPPage extends CDPBasePage {
@@ -299,7 +201,7 @@ class CDPPage extends CDPBasePage {
   private _networkCapturing = false;
   private _networkCapturePattern = '';
   private _networkEntries: Array<{
-    url: string; method: string; responseStatus?: number;
+    requestId: string; url: string; method: string; responseStatus?: number;
     requestHeaders?: Record<string, string>;
     requestBodyKind?: string;
     requestBodyPreview?: string;
@@ -309,6 +211,9 @@ class CDPPage extends CDPBasePage {
     responsePreview?: string;
     responseBodyFullSize?: number;
     responseBodyTruncated?: boolean;
+    requestBodyPending?: boolean;
+    responseFinished?: boolean;
+    captureComplete?: boolean;
     timestamp: number;
   }> = [];
   private _pendingRequests = new Map<string, number>(); // requestId → index in _networkEntries
@@ -325,20 +230,9 @@ class CDPPage extends CDPBasePage {
       await this.bridge.send('Page.enable');
       this._pageEnabled = true;
     }
-    const loadPromise = this.bridge.waitForEvent('Page.loadEventFired', 30_000);
-    void loadPromise.catch(() => {});
-    const navigateResult = await this.bridge.send('Page.navigate', { url });
-    const navigationError = isRecord(navigateResult) && typeof navigateResult.errorText === 'string'
-      ? navigateResult.errorText.trim()
-      : '';
-    if (navigationError) {
-      throw new Error(`Navigation failed for ${url}: ${navigationError}`);
-    }
-    try {
-      await loadPromise;
-    } catch (error) {
-      logVerbose(`[cdp] Timed out waiting for Page.loadEventFired after navigating to ${url}`, normalizeError(error));
-    }
+    const loadPromise = this.bridge.waitForEvent('Page.loadEventFired', 30_000).catch(() => {});
+    await this.bridge.send('Page.navigate', { url });
+    await loadPromise;
     this._lastUrl = url;
     if (options?.waitUntil !== 'none') {
       const maxMs = options?.settleMs ?? 1000;
@@ -353,12 +247,17 @@ class CDPPage extends CDPBasePage {
     const result = await this.bridge.send('Runtime.evaluate', {
       expression,
       returnByValue: true,
-      awaitPromise: true
+      awaitPromise: true,
     }) as RuntimeEvaluateResult;
     if (result.exceptionDetails) {
       throw new Error('Evaluate error: ' + (result.exceptionDetails.exception?.description || 'Unknown exception'));
     }
     return result.result?.value;
+  }
+
+  /** Direct CDP evaluation has no replay/retry path. */
+  async evaluateOnce<T = unknown>(js: string): Promise<T> {
+    return this.evaluate<T>(js);
   }
 
   async getCookies(opts: { domain?: string; url?: string } = {}): Promise<BrowserCookie[]> {
@@ -375,74 +274,6 @@ class CDPPage extends CDPBasePage {
     return domain
       ? cookies.filter((cookie): cookie is BrowserCookie => isCookie(cookie) && matchesCookieDomain(cookie.domain, domain))
       : cookies;
-  }
-
-  async snapshot(opts: SnapshotOptions = {}): Promise<unknown> {
-    const snapshotJs = generateSnapshotJs({
-      viewportExpand: opts.viewportExpand ?? 800,
-      maxDepth: Math.max(1, Math.min(Number(opts.maxDepth) || 50, 200)),
-      interactiveOnly: opts.interactive ?? false,
-      maxTextLength: opts.maxTextLength ?? 120,
-      includeScrollInfo: true,
-      bboxDedup: true,
-    });
-    return this.evaluate(snapshotJs);
-  }
-
-  // ── Shared DOM operations (P1 fix #5 — using dom-helpers.ts) ──
-
-  async pressKey(key: string): Promise<void> {
-    await this.evaluate(pressKeyJs(key));
-  }
-
-  async scrollTo(ref: string): Promise<unknown> {
-    return this.evaluate(scrollToRefJs(ref));
-  }
-
-  async getFormState(): Promise<Record<string, unknown>> {
-    return (await this.evaluate(getFormStateJs())) as Record<string, unknown>;
-  }
-
-  async wait(options: number | WaitOptions): Promise<void> {
-    if (typeof options === 'number') {
-      if (options >= 1) {
-        try {
-          const maxMs = options * 1000;
-          await this.evaluate(waitForDomStableJs(maxMs, Math.min(500, maxMs)));
-          return;
-        } catch {
-          // Fallback: fixed sleep
-        }
-      }
-      await new Promise((resolve) => setTimeout(resolve, options * 1000));
-      return;
-    }
-    if (typeof options.time === 'number') {
-      const waitTime = options.time;
-      await new Promise(resolve => setTimeout(resolve, waitTime * 1000));
-      return;
-    }
-    if (options.selector) {
-      const timeout = (options.timeout ?? 10) * 1000;
-      await this.evaluate(waitForSelectorJs(options.selector, timeout));
-      return;
-    }
-    if (options.text) {
-      const timeout = (options.timeout ?? 30) * 1000;
-      await this.evaluate(waitForTextJs(options.text, timeout));
-    }
-  }
-
-  // ── Implemented methods (P1 fix #2) ──
-
-  async scroll(direction: string = 'down', amount: number = 500): Promise<void> {
-    await this.evaluate(scrollJs(direction, amount));
-  }
-
-  async autoScroll(options?: { times?: number; delayMs?: number }): Promise<void> {
-    const times = options?.times ?? 3;
-    const delayMs = options?.delayMs ?? 2000;
-    await this.evaluate(autoScrollJs(times, delayMs));
   }
 
   async screenshot(options: ScreenshotOptions = {}): Promise<string> {
@@ -524,10 +355,14 @@ class CDPPage extends CDPBasePage {
           };
           timestamp: number;
         };
+        // Redirect hops reuse the request ID. Keep the original request/body
+        // and settle it from the final response instead of retaining an orphan.
+        if (this._pendingRequests.has(p.requestId)) return;
         if (!this._networkCapturePattern || p.request.url.includes(this._networkCapturePattern)) {
           const rawBody = typeof p.request.postData === 'string' ? p.request.postData : '';
           const bodyTruncated = rawBody.length > CDP_REQUEST_BODY_CAPTURE_LIMIT;
-          const idx = this._networkEntries.push({
+          const entry: (typeof this._networkEntries)[number] = {
+            requestId: p.requestId,
             url: p.request.url,
             method: p.request.method,
             requestHeaders: Object.fromEntries(
@@ -538,22 +373,32 @@ class CDPPage extends CDPBasePage {
             requestBodyFullSize: rawBody.length,
             requestBodyTruncated: bodyTruncated,
             timestamp: Date.now(),
-          }) - 1;
+          };
+          const idx = this._networkEntries.push(entry) - 1;
           this._pendingRequests.set(p.requestId, idx);
 
           if (p.request.hasPostData && p.request.postData === undefined) {
+            // Complete only when BOTH bodies are settled; a response body that
+            // finishes first must not let a retaining read drop the entry
+            // before its late request body lands.
+            entry.requestBodyPending = true;
+            const settleComplete = () => {
+              entry.captureComplete = entry.responseFinished === true && entry.requestBodyPending !== true;
+            };
             const requestBodyFetch = this.bridge.send('Network.getRequestPostData', { requestId: p.requestId }).then((result: unknown) => {
               const postData = (result as { postData?: string } | undefined)?.postData;
               if (typeof postData !== 'string') return;
               const truncated = postData.length > CDP_REQUEST_BODY_CAPTURE_LIMIT;
-              this._networkEntries[idx].requestBodyPreview = truncated
+              entry.requestBodyPreview = truncated
                 ? postData.slice(0, CDP_REQUEST_BODY_CAPTURE_LIMIT)
                 : postData;
-              this._networkEntries[idx].requestBodyFullSize = postData.length;
-              this._networkEntries[idx].requestBodyTruncated = truncated;
+              entry.requestBodyFullSize = postData.length;
+              entry.requestBodyTruncated = truncated;
             }).catch(() => {
               // Some request types do not expose post data.
             }).finally(() => {
+              entry.requestBodyPending = false;
+              settleComplete();
               this._pendingBodyFetches.delete(requestBodyFetch);
             });
             this._pendingBodyFetches.add(requestBodyFetch);
@@ -576,15 +421,16 @@ class CDPPage extends CDPBasePage {
         const p = params as { requestId: string };
         const idx = this._pendingRequests.get(p.requestId);
         if (idx !== undefined) {
+          const entry = this._networkEntries[idx];
           const bodyFetch = this.bridge.send('Network.getResponseBody', { requestId: p.requestId }).then((result: unknown) => {
             const r = result as { body?: string; base64Encoded?: boolean } | undefined;
             if (typeof r?.body === 'string') {
               const fullSize = r.body.length;
               const truncated = fullSize > CDP_RESPONSE_BODY_CAPTURE_LIMIT;
               const body = truncated ? r.body.slice(0, CDP_RESPONSE_BODY_CAPTURE_LIMIT) : r.body;
-              this._networkEntries[idx].responsePreview = r.base64Encoded ? `base64:${body}` : body;
-              this._networkEntries[idx].responseBodyFullSize = fullSize;
-              this._networkEntries[idx].responseBodyTruncated = truncated;
+              entry.responsePreview = r.base64Encoded ? `base64:${body}` : body;
+              entry.responseBodyFullSize = fullSize;
+              entry.responseBodyTruncated = truncated;
             }
           }).catch((err) => {
             // Body unavailable for some requests (e.g. uploads) — non-fatal
@@ -593,9 +439,23 @@ class CDPPage extends CDPBasePage {
               console.error(`[cdp] getResponseBody failed for ${p.requestId}:`, err instanceof Error ? err.message : err);
             }
           }).finally(() => {
+            entry.responseFinished = true;
+            entry.captureComplete = entry.requestBodyPending !== true;
             this._pendingBodyFetches.delete(bodyFetch);
           });
           this._pendingBodyFetches.add(bodyFetch);
+          this._pendingRequests.delete(p.requestId);
+        }
+      });
+
+      this.bridge.on('Network.loadingFailed', (params: unknown) => {
+        const p = params as { requestId: string };
+        const idx = this._pendingRequests.get(p.requestId);
+        if (idx !== undefined) {
+          const entry = this._networkEntries[idx];
+          entry.responseFinished = true;
+          // Mirror the extension: a pending request body still completes later.
+          entry.captureComplete = entry.requestBodyPending !== true;
           this._pendingRequests.delete(p.requestId);
         }
       });
@@ -605,13 +465,31 @@ class CDPPage extends CDPBasePage {
     return true;
   }
 
-  async readNetworkCapture(): Promise<unknown[]> {
-    // Await all in-flight body fetches so entries have responsePreview populated
-    if (this._pendingBodyFetches.size > 0) {
+  async readNetworkCapture(options: { retainIncomplete?: boolean } = {}): Promise<unknown[]> {
+    // A draining read awaits all in-flight body fetches so entries are fully
+    // populated. A retaining read must not block on them: a slow or stalled
+    // fetch would hold the caller past its deadline instead of returning the
+    // current snapshot while the entry stays retained for a later read.
+    if (!options.retainIncomplete && this._pendingBodyFetches.size > 0) {
       await Promise.all([...this._pendingBodyFetches]);
     }
-    const entries = [...this._networkEntries];
-    this._networkEntries = [];
+    const entries = this._networkEntries.map(entry => ({ ...entry }));
+    if (!options.retainIncomplete) {
+      this._networkEntries = [];
+      this._pendingRequests.clear();
+      return entries;
+    }
+    const retained: typeof this._networkEntries = [];
+    const reindexed = new Map<number, number>();
+    this._networkEntries.forEach((entry, index) => {
+      if (!entry.captureComplete) {
+        reindexed.set(index, retained.length);
+        retained.push(entry);
+      }
+    });
+    this._networkEntries = retained;
+    this._pendingRequests = new Map([...this._pendingRequests].flatMap(([id, index]) =>
+      reindexed.has(index) ? [[id, reindexed.get(index)!]] : []));
     return entries;
   }
 
@@ -639,11 +517,6 @@ class CDPPage extends CDPBasePage {
     return this._consoleMessages.filter(m => m.type === level);
   }
 
-  async networkRequests(includeStatic: boolean = false): Promise<unknown[]> {
-    const result = await this.evaluate(networkRequestsJs(includeStatic));
-    return Array.isArray(result) ? result : [];
-  }
-
   async tabs(): Promise<unknown[]> {
     return [];
   }
@@ -658,53 +531,6 @@ class CDPPage extends CDPBasePage {
 
   async insertText(text: string): Promise<void> {
     await this.nativeType(text);
-  }
-  async nativeKeyPress(key: string, modifiers: string[] = []): Promise<void> {
-    let modifierFlags = 0;
-    for (const mod of modifiers) {
-      if (mod === 'Alt') modifierFlags |= 1;
-      if (mod === 'Ctrl' || mod === 'Control') modifierFlags |= 2;
-      if (mod === 'Meta') modifierFlags |= 4;
-      if (mod === 'Shift') modifierFlags |= 8;
-    }
-    await this.cdp('Input.dispatchKeyEvent', {
-      type: 'keyDown',
-      key,
-      modifiers: modifierFlags,
-    });
-    await this.cdp('Input.dispatchKeyEvent', {
-      type: 'keyUp',
-      key,
-      modifiers: modifierFlags,
-    });
-  }
-
-  async closeTab(_index?: number): Promise<void> {
-    // Not supported in direct CDP mode
-  }
-
-  async newTab(): Promise<string | undefined> {
-    const result = await this.bridge.send('Target.createTarget', { url: 'about:blank' }, CDP_SEND_TIMEOUT, { root: true });
-    return isRecord(result) && typeof result.targetId === 'string' ? result.targetId : undefined;
-  }
-
-  async installInterceptor(pattern: string): Promise<void> {
-    const { generateInterceptorJs } = await import('../interceptor.js');
-    await this.evaluate(generateInterceptorJs(JSON.stringify(pattern), {
-      arrayName: '__opencli_xhr',
-      patchGuard: '__opencli_interceptor_patched',
-    }));
-  }
-
-  async getInterceptedRequests(): Promise<unknown[]> {
-    const { generateReadInterceptedJs } = await import('../interceptor.js');
-    const result = await this.evaluate(generateReadInterceptedJs('__opencli_xhr'));
-    return Array.isArray(result) ? result : [];
-  }
-
-  async waitForCapture(timeout: number = 10): Promise<void> {
-    const maxMs = timeout * 1000;
-    await this.evaluate(waitForCaptureJs(maxMs));
   }
 }
 
@@ -722,268 +548,6 @@ function matchesCookieDomain(cookieDomain: string, targetDomain: string): boolea
     || normalizedCookieDomain.endsWith(`.${normalizedTargetDomain}`);
 }
 
-async function resolveConnectionEndpoint(
-  endpoint: string,
-): Promise<{ wsUrl: string; browserLevel: boolean; preferNewTarget: boolean }> {
-  if (endpoint === 'auto') {
-    const wsUrl = resolveAnyBrowserWebSocketUrl();
-    if (!wsUrl) {
-      throw new Error('Failed to auto-discover a local browser CDP websocket. Start Chrome with --remote-debugging-port and retry, or set OPENCLI_CDP_ENDPOINT explicitly.');
-    }
-    return {
-      wsUrl,
-      browserLevel: true,
-      preferNewTarget: shouldPreferNewBrowserTarget(endpoint),
-    };
-  }
-
-  if (endpoint.startsWith('ws://') || endpoint.startsWith('wss://')) {
-    const browserLevel = isBrowserLevelWebSocket(endpoint);
-    return {
-      wsUrl: endpoint,
-      browserLevel,
-      preferNewTarget: browserLevel && shouldPreferNewBrowserTarget(endpoint),
-    };
-  }
-
-  if (!endpoint.startsWith('http://') && !endpoint.startsWith('https://')) {
-    return { wsUrl: endpoint, browserLevel: false, preferNewTarget: false };
-  }
-
-  const normalized = endpoint.replace(/\/$/, '');
-  let discoveryError: Error | undefined;
-  let versionError: Error | undefined;
-
-  try {
-    const targets = await fetchJsonDirect(`${normalized}/json`) as CDPTarget[];
-    const target = selectCDPTarget(targets);
-    if (!target?.webSocketDebuggerUrl) {
-      throw new Error('No inspectable targets found at CDP endpoint');
-    }
-    return {
-      wsUrl: rewriteBrowserWebSocketUrlForEndpoint(normalized, target.webSocketDebuggerUrl) ?? target.webSocketDebuggerUrl,
-      browserLevel: false,
-      preferNewTarget: false,
-    };
-  } catch (error) {
-    discoveryError = normalizeError(error);
-    logVerbose(`[cdp] Failed to resolve page websocket from ${normalized}/json`, discoveryError);
-  }
-
-  try {
-    const payload = await fetchJsonDirect(`${normalized}/json/version`);
-    const browserWsUrl = rewriteBrowserWebSocketUrlForEndpoint(
-      normalized,
-      extractBrowserWebSocketUrlFromVersionPayload(payload),
-    );
-    if (browserWsUrl) {
-      return {
-        wsUrl: browserWsUrl,
-        browserLevel: true,
-        preferNewTarget: shouldPreferNewBrowserTarget(endpoint),
-      };
-    }
-  } catch (error) {
-    versionError = normalizeError(error);
-    logVerbose(`[cdp] Failed to resolve browser websocket from ${normalized}/json/version`, versionError);
-  }
-
-  const browserWsUrl = resolveBrowserWebSocketUrl(normalized);
-  if (browserWsUrl) {
-    return {
-      wsUrl: browserWsUrl,
-      browserLevel: true,
-      preferNewTarget: shouldPreferNewBrowserTarget(endpoint),
-    };
-  }
-
-  const detail = [discoveryError?.message, versionError?.message].filter(Boolean).join('; ');
-  throw new Error(detail
-    ? `Failed to resolve an inspectable target from CDP endpoint (${detail})`
-    : 'Failed to resolve an inspectable target from CDP endpoint');
-}
-
-function resolveBrowserWebSocketUrl(endpoint: string): string | null {
-  let parsed: URL;
-  try {
-    parsed = new URL(endpoint);
-  } catch {
-    return null;
-  }
-
-  const host = parsed.hostname.toLowerCase();
-  if (!isLoopbackHost(host)) return null;
-  const port = parsed.port || (parsed.protocol === 'https:' ? '443' : '80');
-
-  for (const filePath of getDevToolsActivePortCandidates()) {
-    try {
-      const content = fs.readFileSync(filePath, 'utf-8');
-      const wsUrl = parseBrowserWebSocketUrlFromActivePort(port, host, content);
-      if (wsUrl) return wsUrl;
-    } catch {
-      // Try the next candidate.
-    }
-  }
-
-  return null;
-}
-
-function resolveAnyBrowserWebSocketUrl(host: string = '127.0.0.1'): string | null {
-  for (const filePath of getDevToolsActivePortCandidates()) {
-    try {
-      const content = fs.readFileSync(filePath, 'utf-8');
-      const wsUrl = parseAnyBrowserWebSocketUrlFromActivePort(content, host);
-      if (wsUrl) return wsUrl;
-    } catch {
-      // Try the next candidate.
-    }
-  }
-
-  return null;
-}
-
-function parseBrowserWebSocketUrlFromActivePort(port: string, host: string, content: string): string | null {
-  const lines = content.trim().split(/\r?\n/).map(line => line.trim()).filter(Boolean);
-  if (lines.length < 2) return null;
-  if (lines[0] !== port) return null;
-  if (!lines[1].startsWith('/devtools/browser/')) return null;
-  return `ws://${formatHostForUrl(host)}:${port}${lines[1]}`;
-}
-
-function parseAnyBrowserWebSocketUrlFromActivePort(content: string, host: string): string | null {
-  const lines = content.trim().split(/\r?\n/).map(line => line.trim()).filter(Boolean);
-  if (lines.length < 2) return null;
-  if (!/^\d+$/.test(lines[0])) return null;
-  if (!lines[1].startsWith('/devtools/browser/')) return null;
-  return `ws://${formatHostForUrl(host)}:${lines[0]}${lines[1]}`;
-}
-
-function getDevToolsActivePortCandidates(): string[] {
-  const candidates: string[] = [];
-  if (process.platform === 'win32') {
-    const localAppData = process.env.LOCALAPPDATA ?? path.join(os.homedir(), 'AppData', 'Local');
-    candidates.push(path.join(localAppData, 'Google', 'Chrome', 'User Data', 'DevToolsActivePort'));
-    candidates.push(path.join(localAppData, 'Microsoft', 'Edge', 'User Data', 'DevToolsActivePort'));
-  } else if (process.platform === 'darwin') {
-    candidates.push(path.join(os.homedir(), 'Library', 'Application Support', 'Google', 'Chrome', 'DevToolsActivePort'));
-    candidates.push(path.join(os.homedir(), 'Library', 'Application Support', 'Microsoft Edge', 'DevToolsActivePort'));
-  } else {
-    candidates.push(path.join(os.homedir(), '.config', 'google-chrome', 'DevToolsActivePort'));
-    candidates.push(path.join(os.homedir(), '.config', 'chromium', 'DevToolsActivePort'));
-    candidates.push(path.join(os.homedir(), '.config', 'microsoft-edge', 'DevToolsActivePort'));
-  }
-  return candidates;
-}
-
-function isBrowserLevelWebSocket(endpoint: string): boolean {
-  return endpoint.includes('/devtools/browser/');
-}
-
-function shouldPreferNewBrowserTarget(endpoint: string): boolean {
-  return endpoint === 'auto' && !process.env.OPENCLI_CDP_TARGET?.trim();
-}
-
-function normalizeWorkspaceKey(workspace?: string): string | undefined {
-  const trimmed = workspace?.trim();
-  return trimmed ? trimmed : undefined;
-}
-
-function makePersistentTargetRegistryKey(endpointKey: string, workspace: string): string {
-  return `${endpointKey}::${workspace}`;
-}
-
-function readPersistentTargetRegistry(): Record<string, string> {
-  try {
-    const raw = fs.readFileSync(PERSISTENT_TARGET_REGISTRY_PATH, 'utf8');
-    const parsed = JSON.parse(raw);
-    if (!isRecord(parsed)) return {};
-    return Object.fromEntries(
-      Object.entries(parsed).filter((entry): entry is [string, string] => typeof entry[0] === 'string' && typeof entry[1] === 'string'),
-    );
-  } catch {
-    return {};
-  }
-}
-
-function writePersistentTargetRegistry(registry: Record<string, string>): void {
-  try {
-    fs.writeFileSync(PERSISTENT_TARGET_REGISTRY_PATH, JSON.stringify(registry, null, 2), 'utf8');
-  } catch {
-    // Best-effort cache only.
-  }
-}
-
-function getPersistentTargetId(endpointKey: string, workspace: string): string | undefined {
-  const registry = readPersistentTargetRegistry();
-  return registry[makePersistentTargetRegistryKey(endpointKey, workspace)];
-}
-
-function setPersistentTargetId(endpointKey: string, workspace: string, targetId: string): void {
-  const registry = readPersistentTargetRegistry();
-  registry[makePersistentTargetRegistryKey(endpointKey, workspace)] = targetId;
-  writePersistentTargetRegistry(registry);
-}
-
-function clearPersistentTargetId(endpointKey: string, workspace: string): void {
-  const registry = readPersistentTargetRegistry();
-  delete registry[makePersistentTargetRegistryKey(endpointKey, workspace)];
-  writePersistentTargetRegistry(registry);
-}
-
-function selectTargetById(targets: CDPTarget[], targetId?: string): CDPTarget | undefined {
-  if (!targetId) return undefined;
-  return targets.find((target) => target.targetId === targetId && isBrowserAttachableTarget(target));
-}
-
-function isLoopbackHost(host: string): boolean {
-  return ['127.0.0.1', 'localhost', '::1', '[::1]'].includes(host);
-}
-
-function formatHostForUrl(host: string): string {
-  return host.includes(':') && !host.startsWith('[') ? `[${host}]` : host;
-}
-
-function extractBrowserWebSocketUrlFromVersionPayload(payload: unknown): string | null {
-  if (!isRecord(payload)) return null;
-  const wsUrl = payload.webSocketDebuggerUrl;
-  return typeof wsUrl === 'string' && isBrowserLevelWebSocket(wsUrl) ? wsUrl : null;
-}
-
-function rewriteBrowserWebSocketUrlForEndpoint(endpoint: string, wsUrl: string | null): string | null {
-  if (!wsUrl) return null;
-
-  let endpointUrl: URL;
-  let browserWsUrl: URL;
-  try {
-    endpointUrl = new URL(endpoint);
-    browserWsUrl = new URL(wsUrl);
-  } catch {
-    return wsUrl;
-  }
-
-  if (isLoopbackHost(endpointUrl.hostname.toLowerCase())) return wsUrl;
-  if (!isLoopbackHost(browserWsUrl.hostname.toLowerCase())) return wsUrl;
-
-  browserWsUrl.protocol = endpointUrl.protocol === 'https:' ? 'wss:' : 'ws:';
-  browserWsUrl.hostname = endpointUrl.hostname;
-  browserWsUrl.port = endpointUrl.port;
-  browserWsUrl.username = endpointUrl.username;
-  browserWsUrl.password = endpointUrl.password;
-  return browserWsUrl.toString();
-}
-
-function isBrowserAttachableTarget(target: CDPTarget): boolean {
-  const type = (target.type ?? '').toLowerCase();
-  if (!type) return true;
-  return ['page', 'app', 'webview', 'iframe'].includes(type);
-}
-
-function selectBrowserAttachTarget(targets: CDPTarget[]): CDPTarget | undefined {
-  return selectCDPTarget(targets.filter(isBrowserAttachableTarget));
-}
-
-// ── CDP target selection (unchanged) ──
-
 function selectCDPTarget(targets: CDPTarget[]): CDPTarget | undefined {
   const preferredPattern = compilePreferredPattern(process.env.OPENCLI_CDP_TARGET);
   return targets
@@ -993,7 +557,7 @@ function selectCDPTarget(targets: CDPTarget[]): CDPTarget | undefined {
 }
 
 function scoreCDPTarget(target: CDPTarget, preferredPattern?: RegExp): number {
-  if (!target.webSocketDebuggerUrl && !target.targetId) return Number.NEGATIVE_INFINITY;
+  if (!target.webSocketDebuggerUrl) return Number.NEGATIVE_INFINITY;
 
   const type = (target.type ?? '').toLowerCase();
   const url = (target.url ?? '').toLowerCase();
@@ -1002,6 +566,9 @@ function scoreCDPTarget(target: CDPTarget, preferredPattern?: RegExp): number {
 
   if (!haystack.trim() && !type) return Number.NEGATIVE_INFINITY;
   if (haystack.includes('devtools')) return Number.NEGATIVE_INFINITY;
+  // Chrome exposes browser UI targets (e.g. the toolbar) alongside real tabs.
+  // They cannot be navigated and must never outrank an about:blank page.
+  if (/^chrome(?:-untrusted)?:\/\/[^/]*\.top-chrome(?:\/|$)/.test(url)) return Number.NEGATIVE_INFINITY;
   if (type === 'background_page' || type === 'service_worker') return Number.NEGATIVE_INFINITY;
 
   let score = 0;
@@ -1015,20 +582,6 @@ function scoreCDPTarget(target: CDPTarget, preferredPattern?: RegExp): number {
   if (url === '' || url === 'about:blank') score -= 40;
 
   if (title && title !== 'devtools') score += 25;
-  if (title.includes('antigravity')) score += 120;
-  if (title.includes('codex')) score += 120;
-  if (title.includes('cursor')) score += 120;
-  if (title.includes('chatwise')) score += 120;
-  if (title.includes('notion')) score += 120;
-  if (title.includes('discord')) score += 120;
-
-  if (url.includes('antigravity')) score += 100;
-  if (url.includes('codex')) score += 100;
-  if (url.includes('cursor')) score += 100;
-  if (url.includes('chatwise')) score += 100;
-  if (url.includes('notion')) score += 100;
-  if (url.includes('discord')) score += 100;
-
 
   return score;
 }
@@ -1039,31 +592,13 @@ function compilePreferredPattern(raw: string | undefined): RegExp | undefined {
   return new RegExp(escapeRegExp(value.toLowerCase()));
 }
 
-function hasExplicitTargetHint(): boolean {
-  return !!process.env.OPENCLI_CDP_TARGET?.trim();
-}
-
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 export const __test__ = {
   selectCDPTarget,
-  selectBrowserAttachTarget,
-  selectTargetById,
-  isBrowserAttachableTarget,
   scoreCDPTarget,
-  parseBrowserWebSocketUrlFromActivePort,
-  parseAnyBrowserWebSocketUrlFromActivePort,
-  extractBrowserWebSocketUrlFromVersionPayload,
-  rewriteBrowserWebSocketUrlForEndpoint,
-  isBrowserLevelWebSocket,
-  isLoopbackHost,
-  shouldPreferNewBrowserTarget,
-  hasExplicitTargetHint,
-  normalizeWorkspaceKey,
-  makePersistentTargetRegistryKey,
-  persistentTargetRegistryPath: PERSISTENT_TARGET_REGISTRY_PATH,
 };
 
 function fetchJsonDirect(url: string): Promise<unknown> {
@@ -1073,7 +608,7 @@ function fetchJsonDirect(url: string): Promise<unknown> {
       const statusCode = res.statusCode ?? 0;
       if (statusCode < 200 || statusCode >= 300) {
         res.resume();
-        reject(new Error(`HTTP ${statusCode}`));
+        reject(new Error(`Failed to fetch CDP targets: HTTP ${statusCode}`));
         return;
       }
 
@@ -1083,7 +618,7 @@ function fetchJsonDirect(url: string): Promise<unknown> {
         try {
           resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')));
         } catch (error) {
-          reject(normalizeError(error));
+          reject(error instanceof Error ? error : new Error(String(error)));
         }
       });
     });
@@ -1092,13 +627,4 @@ function fetchJsonDirect(url: string): Promise<unknown> {
     request.setTimeout(10_000, () => request.destroy(new Error('Timed out fetching CDP targets')));
     request.end();
   });
-}
-
-function logVerbose(message: string, error?: Error): void {
-  if (process.env.OPENCLI_VERBOSE !== '1') return;
-  console.error(error ? `${message}: ${error.message}` : message);
-}
-
-function normalizeError(error: unknown): Error {
-  return error instanceof Error ? error : new Error(String(error));
 }

@@ -44,6 +44,14 @@ describe('commanderAdapter arg passing', () => {
     process.exitCode = undefined;
   });
 
+  it('rejects an unknown format before executing the command', async () => {
+    const program = new Command();
+    registerCommandToProgram(program.command('paperreview'), { ...cmd, access: 'write' });
+    await expect(program.parseAsync(['node', 'opencli', 'paperreview', 'submit', './paper.pdf', '-f', 'bogus']))
+      .rejects.toMatchObject({ code: 'ARGUMENT', exitCode: 2 });
+    expect(mockExecuteCommand).not.toHaveBeenCalled();
+  });
+
   it('passes bool flag values through to executeCommand for coercion', async () => {
     const program = new Command();
     const siteCmd = program.command('paperreview');
@@ -276,118 +284,6 @@ describe('commanderAdapter validation preparation', () => {
   });
 });
 
-describe('registerCommandToProgram browser env overrides', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    vi.unstubAllEnvs();
-    process.exitCode = undefined;
-  });
-
-  it('applies command-level CDP overrides only while a browser command executes', async () => {
-    const seen: Array<{ endpoint?: string; target?: string }> = [];
-    mockExecuteCommand.mockImplementation(async () => {
-      seen.push({
-        endpoint: process.env.OPENCLI_CDP_ENDPOINT,
-        target: process.env.OPENCLI_CDP_TARGET,
-      });
-      return [];
-    });
-
-    const cmd: CliCommand = {
-      site: 'antigravity',
-      name: 'status',
-      description: 'status',
-      browser: true,
-      supportsBrowserCdp: false,
-      args: [],
-    };
-
-    const program = new Command();
-    const siteCmd = program.command('antigravity');
-    registerCommandToProgram(siteCmd, cmd);
-
-    await program.parseAsync([
-      'node',
-      'opencli',
-      'antigravity',
-      'status',
-      '--cdp-endpoint',
-      'http://127.0.0.1:9333',
-      '--cdp-target',
-      'launchpad',
-    ]);
-
-    expect(mockExecuteCommand).toHaveBeenCalledWith(cmd, {}, false, { prepared: true });
-    expect(seen).toEqual([
-      {
-        endpoint: 'http://127.0.0.1:9333',
-        target: 'launchpad',
-      },
-    ]);
-    expect(process.env.OPENCLI_CDP_ENDPOINT).toBeUndefined();
-    expect(process.env.OPENCLI_CDP_TARGET).toBeUndefined();
-  });
-
-  it('enables browser-cdp auto mode only for supported browser commands', async () => {
-    const seen: Array<{ endpoint?: string }> = [];
-    mockExecuteCommand.mockImplementation(async () => {
-      seen.push({ endpoint: process.env.OPENCLI_CDP_ENDPOINT });
-      return [];
-    });
-
-    const cmd: CliCommand = {
-      site: 'linux-do',
-      name: 'categories',
-      description: 'categories',
-      browser: true,
-      supportsBrowserCdp: true,
-      args: [],
-    };
-
-    const program = new Command();
-    const siteCmd = program.command('linux-do');
-    registerCommandToProgram(siteCmd, cmd);
-
-    await program.parseAsync([
-      'node',
-      'opencli',
-      'linux-do',
-      'categories',
-      '--browser-cdp',
-    ]);
-
-    expect(seen).toEqual([{ endpoint: 'auto' }]);
-    expect(process.env.OPENCLI_CDP_ENDPOINT).toBeUndefined();
-  });
-
-  it('does not register browser-cdp flags for desktop-style commands', async () => {
-    const cmd: CliCommand = {
-      site: 'cursor',
-      name: 'ask',
-      description: 'ask',
-      browser: true,
-      supportsBrowserCdp: false,
-      args: [],
-    };
-
-    const program = new Command();
-    program.exitOverride();
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const siteCmd = program.command('cursor');
-    registerCommandToProgram(siteCmd, cmd);
-
-    await expect(program.parseAsync([
-      'node',
-      'opencli',
-      'cursor',
-      'ask',
-      '--browser-cdp',
-    ])).rejects.toThrow();
- 
-    errorSpy.mockRestore();
-  });
-});
-
 describe('commanderAdapter default formats', () => {
   const cmd: CliCommand = {
     site: 'gemini',
@@ -408,7 +304,7 @@ describe('commanderAdapter default formats', () => {
     process.exitCode = undefined;
   });
 
-  it('uses the command defaultFormat when the user keeps the default table format', async () => {
+  it('defaults to JSON regardless of adapter presentation preferences', async () => {
     const program = new Command();
     const siteCmd = program.command('gemini');
     registerCommandToProgram(siteCmd, cmd);
@@ -417,8 +313,24 @@ describe('commanderAdapter default formats', () => {
 
     expect(mockRenderOutput).toHaveBeenCalledWith(
       [{ response: 'hello' }],
-      expect.objectContaining({ fmt: 'plain' }),
+      expect.objectContaining({ fmt: 'json' }),
     );
+  });
+
+  it('emits null for an empty adapter result', async () => {
+    mockExecuteCommand.mockResolvedValue(null);
+    const program = new Command();
+    registerCommandToProgram(program.command('gemini'), cmd);
+    await program.parseAsync(['node', 'opencli', 'gemini', 'ask']);
+    expect(mockRenderOutput).toHaveBeenCalledWith(null, expect.objectContaining({ fmt: 'json' }));
+  });
+
+  it('preserves an explicit raw stdout export without appending JSON', async () => {
+    mockExecuteCommand.mockResolvedValue(null);
+    const program = new Command();
+    registerCommandToProgram(program.command('gemini'), { ...cmd, args: [{ name: 'stdout', type: 'boolean', default: false }] });
+    await program.parseAsync(['node', 'opencli', 'gemini', 'ask', '--stdout', 'true']);
+    expect(mockRenderOutput).not.toHaveBeenCalled();
   });
 
   it('respects an explicit user format over the command defaultFormat', async () => {
@@ -454,12 +366,12 @@ describe('commanderAdapter error envelope output', () => {
     process.exitCode = undefined;
   });
 
-  it('outputs YAML error envelope with adapter hint to stderr', async () => {
+  it('outputs JSON error envelope with adapter hint to stdout', async () => {
     const program = new Command();
     const siteCmd = program.command('xiaohongshu');
     registerCommandToProgram(siteCmd, cmd);
 
-    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    const stderrSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
     mockExecuteCommand.mockRejectedValueOnce(
       new EmptyResultError(
         'xiaohongshu/note',
@@ -470,21 +382,19 @@ describe('commanderAdapter error envelope output', () => {
     await program.parseAsync(['node', 'opencli', 'xiaohongshu', 'note', '69ca3927000000001a020fd5']);
 
     const output = stderrSpy.mock.calls.map(c => String(c[0])).join('');
-    expect(output).toContain('ok: false');
-    expect(output).toContain('code: EMPTY_RESULT');
+    expect(output).toContain('"ok":false');
+    expect(output).toContain('"code":"EMPTY_RESULT"');
     expect(output).toContain('xsec_token');
-    expect(output).toContain('--trace=retain-on-failure');
-    expect(output).toContain('opencli xiaohongshu note --trace retain-on-failure');
 
     stderrSpy.mockRestore();
   });
 
-  it('outputs YAML error envelope for selector errors', async () => {
+  it('outputs JSON error envelope for selector errors', async () => {
     const program = new Command();
     const siteCmd = program.command('xiaohongshu');
     registerCommandToProgram(siteCmd, cmd);
 
-    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    const stderrSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
     mockExecuteCommand.mockRejectedValueOnce(
       selectorError('.note-title', 'The note title selector no longer matches the current page.'),
     );
@@ -492,10 +402,9 @@ describe('commanderAdapter error envelope output', () => {
     await program.parseAsync(['node', 'opencli', 'xiaohongshu', 'note', '69ca3927000000001a020fd5']);
 
     const output = stderrSpy.mock.calls.map(c => String(c[0])).join('');
-    expect(output).toContain('ok: false');
-    expect(output).toContain('code: SELECTOR');
+    expect(output).toContain('"ok":false');
+    expect(output).toContain('"code":"SELECTOR"');
     expect(output).toContain('selector no longer matches');
-    expect(output).toContain('--trace=retain-on-failure');
 
     stderrSpy.mockRestore();
   });
@@ -505,7 +414,7 @@ describe('commanderAdapter error envelope output', () => {
     const siteCmd = program.command('xiaohongshu');
     registerCommandToProgram(siteCmd, cmd);
 
-    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    const stderrSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
     mockExecuteCommand.mockRejectedValueOnce(selectorError('.note-title'));
 
     await program.parseAsync([
@@ -519,7 +428,7 @@ describe('commanderAdapter error envelope output', () => {
     ]);
 
     const output = stderrSpy.mock.calls.map(c => String(c[0])).join('');
-    expect(output).toContain('code: SELECTOR');
+    expect(output).toContain('"code":"SELECTOR"');
     expect(output).not.toContain('AutoFix: re-run');
 
     stderrSpy.mockRestore();
@@ -530,7 +439,7 @@ describe('commanderAdapter error envelope output', () => {
     const siteCmd = program.command('xiaohongshu');
     registerCommandToProgram(siteCmd, cmd);
 
-    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    const stderrSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
     const err = selectorError('.note-title');
     attachTraceReceipt(err, {
       schemaVersion: 1,
@@ -556,10 +465,10 @@ describe('commanderAdapter error envelope output', () => {
     ]);
 
     const output = stderrSpy.mock.calls.map(c => String(c[0])).join('');
-    expect(output).toContain('trace:');
-    expect(output).toContain('dir: /tmp/opencli/profiles/default/traces/trace-1');
-    expect(output).toContain('summaryPath: /tmp/opencli/profiles/default/traces/trace-1/summary.md');
-    expect(output).toContain('receiptPath: /tmp/opencli/profiles/default/traces/trace-1/receipt.json');
+    expect(JSON.parse(output).trace.traceId).toBe('trace-1');
+    expect(output).toContain('/tmp/opencli/profiles/default/traces/trace-1');
+    expect(output).toContain('/tmp/opencli/profiles/default/traces/trace-1/summary.md');
+    expect(output).toContain('/tmp/opencli/profiles/default/traces/trace-1/receipt.json');
 
     stderrSpy.mockRestore();
   });

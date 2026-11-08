@@ -1,7 +1,5 @@
 import { Agent, EnvHttpProxyAgent, fetch as undiciFetch, type Dispatcher } from 'undici';
 
-import { URL } from 'node:url';
-
 const LOOPBACK_NO_PROXY_ENTRIES = ['127.0.0.1', 'localhost', '::1'];
 
 type ProxyEnvKey =
@@ -16,16 +14,6 @@ const PROXY_ENV_BY_PROTOCOL: Record<'http:' | 'https:', ProxyEnvKey[]> = {
   'http:': ['http_proxy', 'HTTP_PROXY', 'all_proxy', 'ALL_PROXY'],
   'https:': ['https_proxy', 'HTTPS_PROXY', 'all_proxy', 'ALL_PROXY'],
 };
-const DEFAULT_PORT_BY_PROTOCOL: Record<'http:' | 'https:', string> = {
-  'http:': '80',
-  'https:': '443',
-};
-
-export interface ProxyDecision {
-  mode: 'direct' | 'proxy';
-  proxyUrl?: string;
-}
-
 interface NoProxyEntry {
   host: string;
   port?: string;
@@ -35,7 +23,6 @@ interface ProxyConfig {
   httpProxy?: string;
   httpsProxy?: string;
   noProxy?: string;
-  noProxyEntries: NoProxyEntry[];
 }
 
 let installed = false;
@@ -116,18 +103,9 @@ function serializeNoProxyEntry(entry: NoProxyEntry): string {
 
 function effectiveNoProxyValue(entries: NoProxyEntry[]): string | undefined {
   if (entries.length === 0) return undefined;
+  if (entries.some(entry => entry.host === '*')) return '*';
 
   return entries.map(serializeNoProxyEntry).join(',');
-}
-
-function matchesNoProxyEntry(url: URL, entry: NoProxyEntry): boolean {
-  const { host, port } = entry;
-  if (host === '*') return true;
-
-  const hostname = normalizeHostname(url.hostname);
-  const urlPort = url.port || DEFAULT_PORT_BY_PROTOCOL[url.protocol as 'http:' | 'https:'] || undefined;
-  if (port && port !== urlPort) return false;
-  return hostname === host || hostname.endsWith(`.${host}`);
 }
 
 function resolveProxyConfig(env: NodeJS.ProcessEnv = process.env): ProxyConfig {
@@ -143,7 +121,6 @@ function resolveProxyConfig(env: NodeJS.ProcessEnv = process.env): ProxyConfig {
       'ALL_PROXY',
     ]),
     noProxy: effectiveNoProxyValue(noProxyEntries),
-    noProxyEntries,
   };
 }
 
@@ -176,22 +153,9 @@ export function hasProxyEnv(env: NodeJS.ProcessEnv = process.env): boolean {
   return Boolean(config.httpProxy || config.httpsProxy);
 }
 
-export function decideProxy(url: URL, env: NodeJS.ProcessEnv = process.env): ProxyDecision {
-  const config = resolveProxyConfig(env);
-  if (config.noProxyEntries.some((entry) => matchesNoProxyEntry(url, entry))) {
-    return { mode: 'direct' };
-  }
-
-  const proxyUrl = url.protocol === 'https:' ? config.httpsProxy : config.httpProxy;
-  if (!proxyUrl) return { mode: 'direct' };
-  return { mode: 'proxy', proxyUrl };
-}
-
-export function getNetworkDispatcher(url?: URL, env: NodeJS.ProcessEnv = process.env): Dispatcher {
+export function getNetworkDispatcher(env: NodeJS.ProcessEnv = process.env): Dispatcher {
   const config = resolveProxyConfig(env);
   if (!config.httpProxy && !config.httpsProxy) return directDispatcher;
-  const decision = url ? decideProxy(url, env) : { mode: 'proxy' as const };
-  if (decision.mode === 'direct') return directDispatcher;
   return createProxyDispatcher(config);
 }
 
@@ -203,7 +167,7 @@ export async function fetchWithNodeNetwork(input: RequestInfo | URL, init: Reque
 
   return (await undiciFetch(input as Parameters<typeof undiciFetch>[0], {
     ...init,
-    dispatcher: getNetworkDispatcher(url),
+    dispatcher: getNetworkDispatcher(),
   } as Parameters<typeof undiciFetch>[1])) as unknown as Response;
 }
 

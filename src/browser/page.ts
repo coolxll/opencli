@@ -15,7 +15,7 @@ import { buildEvaluateExpression } from './utils.js';
 import { saveBase64ToFile } from '../utils.js';
 import { generateStealthJs } from './stealth.js';
 import { waitForDomStableJs } from './dom-helpers.js';
-import { CDPBasePage } from './base-page.js';
+import { CDPBasePage, NativeInputVisibilityError } from './base-page.js';
 import { classifyBrowserError } from './errors.js';
 import { CommandExecutionError } from '../errors.js';
 import { log } from '../logger.js';
@@ -201,6 +201,11 @@ export class Page extends CDPBasePage {
     }
   }
 
+  /** Non-idempotent writes must not use evaluate's navigation retry. */
+  async evaluateOnce<T = unknown>(js: string): Promise<T> {
+    return await sendCommand('exec', { code: buildEvaluateExpression(js, []), ...this._cmdOpts() }) as T;
+  }
+
   async getCookies(opts: { domain?: string; url?: string } = {}): Promise<BrowserCookie[]> {
     const result = await sendCommand('cookies', { ...this._sessionOpts(), ...opts });
     if (!Array.isArray(result) || result.some(cookie => !cookie || typeof cookie.name !== 'string' || typeof cookie.value !== 'string')) {
@@ -211,16 +216,26 @@ export class Page extends CDPBasePage {
 
   /** Release the current browser session lease in the extension */
   async closeWindow(): Promise<void> {
+    const closeOwnedTab = process.env.OPENCLI_CLOSE_OWNED_TAB === '1';
     try {
-      await sendCommand('close-window', { ...this._sessionOpts() });
-    } catch {
+      const result = await sendCommand(closeOwnedTab ? 'close-owned-tab' : 'close-window', {
+        ...this._sessionOpts(),
+      });
+      const cleanup = result && typeof result === 'object' && 'tabCleanup' in result ? result.tabCleanup : undefined;
+      if (closeOwnedTab && cleanup !== 'closed-owned-tab' && cleanup !== 'no-owned-tab') {
+        throw new CommandExecutionError('Browser Bridge did not acknowledge owned-tab cleanup; update the extension.');
+      }
+    } catch (err) {
+      if (closeOwnedTab) {
+        log.warn(`Owned-tab cleanup failed (session=${this.session}, surface=${this.surface}): ${err instanceof Error ? err.message : String(err)}. Retry cleanup separately or close the remaining tab manually; do not repeat the site action.`);
+        throw err;
+      }
       // Window may already be closed or daemon may be down
-    } finally {
-      this._page = undefined;
-      this._lastUrl = null;
-      this._networkCaptureUnsupported = false;
-      this._networkCaptureWarned = false;
     }
+    this._page = undefined;
+    this._lastUrl = null;
+    this._networkCaptureUnsupported = false;
+    this._networkCaptureWarned = false;
   }
 
   async tabs(): Promise<unknown[]> {
@@ -298,10 +313,11 @@ export class Page extends CDPBasePage {
     }
   }
 
-  async readNetworkCapture(): Promise<unknown[]> {
+  async readNetworkCapture(options: { retainIncomplete?: boolean } = {}): Promise<unknown[]> {
     if (this._networkCaptureUnsupported) return [];
     try {
       const result = await sendCommand('network-capture-read', {
+        ...options,
         ...this._cmdOpts(),
       });
       return Array.isArray(result) ? result : [];
@@ -367,6 +383,7 @@ export class Page extends CDPBasePage {
 
   /** Precise click using DOM.getContentQuads/getBoxModel for inline elements */
   async clickWithQuads(ref: string): Promise<void> {
+    await this.assertNativeInputVisible();
     const safeRef = JSON.stringify(ref);
     const cssSelector = `[data-opencli-ref="${ref.replace(/"/g, '\\"')}"]`;
 
@@ -401,7 +418,10 @@ export class Page extends CDPBasePage {
           await this.nativeClick(Math.round(cx), Math.round(cy));
           return;
         }
-      } catch { /* fallthrough */ }
+      } catch (error) {
+        if (error instanceof NativeInputVisibilityError) throw error;
+        // Fall through for unsupported geometry lookup.
+      }
 
       // Try getBoxModel
       try {
@@ -413,8 +433,14 @@ export class Page extends CDPBasePage {
           await this.nativeClick(Math.round(cx), Math.round(cy));
           return;
         }
-      } catch { /* fallthrough */ }
-    } catch { /* fallthrough */ }
+      } catch (error) {
+        if (error instanceof NativeInputVisibilityError) throw error;
+        // Fall through for unsupported geometry lookup.
+      }
+    } catch (error) {
+      if (error instanceof NativeInputVisibilityError) throw error;
+      // Fall through for unsupported DOM lookup.
+    }
 
     // Final fallback: regular click
     await this.evaluate(`

@@ -1,17 +1,19 @@
 /**
  * opencli browser protocol — shared types between daemon, extension, and CLI.
  *
- * 5 actions: exec, navigate, tabs, cookies, screenshot.
- * Everything else is just JS code sent via 'exec'.
+ * Page actions use leases; chrome-call/chrome-describe manage native browser resources.
  */
 
 export type Action =
+  | 'chrome-call'
+  | 'chrome-describe'
   | 'exec'
   | 'navigate'
   | 'tabs'
   | 'cookies'
   | 'screenshot'
   | 'close-window'
+  | 'close-owned-tab'
   | 'sessions'
   | 'set-file-input'
   | 'insert-text'
@@ -27,10 +29,14 @@ export interface Command {
   id: string;
   /** Action type */
   action: Action;
+  /** Keep in-flight network capture entries for a later completed read. */
+  retainIncomplete?: boolean;
   /** Target page identity (targetId). Cross-layer contract with the daemon. */
   page?: string;
   /** JS code to evaluate in page context (exec action) */
   code?: string;
+  chromeMethod?: string;
+  chromeArgs?: unknown[];
   /** Browser session name for tab/page continuity. */
   session?: string;
   /** Runtime surface selecting owned container policy. */
@@ -118,7 +124,12 @@ export interface Result {
 
 /** Default daemon port */
 export const DAEMON_PORT = 19825;
-export const DAEMON_HOST = 'localhost';
+/**
+ * Must equal DAEMON_HOST in src/constants.ts (the address the daemon binds).
+ * Never `localhost`: IPv6-preferring hosts (notably Windows) resolve it to
+ * ::1 first, so the ping and WebSocket can miss the daemon (#2690, #2762).
+ */
+export const DAEMON_HOST = '127.0.0.1';
 export const DAEMON_WS_URL = `ws://${DAEMON_HOST}:${DAEMON_PORT}/ext`;
 /** Lightweight health-check endpoint — probed before each WebSocket attempt. */
 export const DAEMON_PING_URL = `http://${DAEMON_HOST}:${DAEMON_PORT}/ping`;

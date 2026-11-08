@@ -9,6 +9,7 @@ import { getWindowsSessionAutostartBlock, isWindowsSession0 } from '../windows-s
 import { extractUserDataDir } from './session0-tracker.js';
 import { waitForBridgeReady } from './bridge-readiness.js';
 import { launchConfiguredBrowser } from './autostart.js';
+import { isDaemonStale } from './daemon-version.js';
 import { fetchDaemonStatus, getDaemonHealth, requestDaemonShutdown, type DaemonHealth, type DaemonStatus } from './daemon-transport.js';
 
 /** Give an already-open extension a chance to reconnect before launching another browser. */
@@ -118,7 +119,7 @@ export async function ensureBrowserBridgeReady(
 
   const health = await getDaemonHealth({ contextId, preferredContextId });
   const daemonVersion = health.status?.daemonVersion;
-  const isStale = !!health.status && (!daemonVersion || daemonVersion !== PKG_VERSION);
+  const isStale = isDaemonStale(health.status, PKG_VERSION);
   let staleDaemonReplaced = false;
   let observedHealth = health;
   let autostartFailure: string | undefined;

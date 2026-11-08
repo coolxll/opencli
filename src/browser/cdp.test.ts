@@ -1,5 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import * as fs from 'node:fs';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 const { MockWebSocket } = vi.hoisted(() => {
   class MockWebSocket {
@@ -39,15 +42,7 @@ vi.mock('ws', () => ({
   WebSocket: MockWebSocket,
 }));
 
-import { CDPBridge, CDP_REQUEST_BODY_CAPTURE_LIMIT, __test__ } from './cdp.js';
-
-function clearPersistentTargetRegistry(): void {
-  try {
-    fs.unlinkSync(__test__.persistentTargetRegistryPath);
-  } catch {
-    // Ignore missing file.
-  }
-}
+import { CDPBridge, CDP_REQUEST_BODY_CAPTURE_LIMIT } from './cdp.js';
 
 describe('CDPBridge cookies', () => {
   beforeEach(() => {
@@ -114,7 +109,7 @@ describe('CDPBridge cookies', () => {
     vi.stubEnv('OPENCLI_CDP_ENDPOINT', 'ws://127.0.0.1:9222/devtools/page/1');
 
     const bridge = new CDPBridge();
-    const send = vi.spyOn(bridge, 'send').mockResolvedValue({});
+    const send = vi.spyOn(bridge, 'send').mockResolvedValue({ result: { value: 'visible' } });
 
     const page = await bridge.connect();
     send.mockClear();
@@ -131,16 +126,48 @@ describe('CDPBridge cookies', () => {
     await page.handleJavaScriptDialog!(true, 'ok');
     await page.cdp!('Page.getLayoutMetrics', {});
 
-    expect(send.mock.calls).toEqual([
+    expect(send.mock.calls.filter(([method]) => method !== 'Runtime.evaluate')).toEqual([
       ['Input.insertText', { text: 'hello' }],
-      ['Input.dispatchKeyEvent', { type: 'keyDown', key: 'a', modifiers: 2 }],
-      ['Input.dispatchKeyEvent', { type: 'keyUp', key: 'a', modifiers: 2 }],
+      ['Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, nativeVirtualKeyCode: 65, modifiers: 2 }],
+      ['Input.dispatchKeyEvent', { type: 'keyUp', key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, nativeVirtualKeyCode: 65, modifiers: 2 }],
       ['Input.dispatchMouseEvent', { type: 'mouseMoved', x: 10, y: 20 }],
       ['Input.dispatchMouseEvent', { type: 'mousePressed', x: 10, y: 20, button: 'left', clickCount: 1 }],
       ['Input.dispatchMouseEvent', { type: 'mouseReleased', x: 10, y: 20, button: 'left', clickCount: 1 }],
       ['Page.handleJavaScriptDialog', { accept: true, promptText: 'ok' }],
       ['Page.getLayoutMetrics', {}],
     ]);
+  });
+
+  it('dispatches native Enter with keyCode 13, code and keypress text (#2751)', async () => {
+    vi.stubEnv('OPENCLI_CDP_ENDPOINT', 'ws://127.0.0.1:9222/devtools/page/1');
+
+    const bridge = new CDPBridge();
+    const send = vi.spyOn(bridge, 'send').mockResolvedValue({ result: { value: 'visible' } });
+
+    const page = await bridge.connect();
+    send.mockClear();
+
+    await page.pressKey('Enter');
+
+    const enter = { key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13, modifiers: 0 };
+    expect(send.mock.calls.filter(([method]) => method === 'Input.dispatchKeyEvent')).toEqual([
+      ['Input.dispatchKeyEvent', { type: 'keyDown', ...enter, text: '\r', unmodifiedText: '\r' }],
+      ['Input.dispatchKeyEvent', { type: 'keyUp', ...enter }],
+    ]);
+    await bridge.close();
+  });
+
+  it.each(['hidden', 'prerender', undefined])('blocks native input when visibility is %s', async visibility => {
+    vi.stubEnv('OPENCLI_CDP_ENDPOINT', 'ws://127.0.0.1:9222/devtools/page/1');
+    const bridge = new CDPBridge();
+    const send = vi.spyOn(bridge, 'send').mockResolvedValue({ result: { value: visibility } });
+    const page = await bridge.connect();
+    send.mockClear();
+    await expect(page.nativeClick!(10, 20)).rejects.toMatchObject({ code: 'COMMAND_EXEC' });
+    await expect(page.nativeKeyPress!('Enter')).rejects.toMatchObject({ code: 'COMMAND_EXEC' });
+    await expect(page.pressKey('Enter')).rejects.toMatchObject({ code: 'COMMAND_EXEC' });
+    expect(send.mock.calls.every(([method]) => method === 'Runtime.evaluate')).toBe(true);
+    await bridge.close();
   });
 
   it('captures request headers and bounded post data on direct CDP pages', async () => {
@@ -179,365 +206,195 @@ describe('CDPBridge cookies', () => {
     });
     expect(String(entries[0].requestBodyPreview)).toHaveLength(CDP_REQUEST_BODY_CAPTURE_LIMIT);
   });
-});
 
-describe('CDP browser websocket helpers', () => {
-  beforeEach(() => {
-    vi.unstubAllEnvs();
-    vi.restoreAllMocks();
-    clearPersistentTargetRegistry();
-  });
-
-  it('accepts browser-level targets that only expose targetId', () => {
-    const target = __test__.selectCDPTarget([
-      {
-        targetId: 'page-1',
-        type: 'page',
-        title: 'Hacker News',
-        url: 'https://news.ycombinator.com/',
-      },
-      {
-        targetId: 'devtools-1',
-        type: 'page',
-        title: 'DevTools - localhost:9222',
-        url: 'devtools://devtools/bundled/inspector.html',
-      },
-    ]);
-
-    expect(target?.targetId).toBe('page-1');
-  });
-
-  it('keeps browser-level attach compatible with app and webview targets', () => {
-    const target = __test__.selectBrowserAttachTarget([
-      {
-        targetId: 'app-1',
-        type: 'app',
-        title: 'Codex Desktop',
-        url: 'file:///app/index.html',
-      },
-      {
-        targetId: 'worker-1',
-        type: 'service_worker',
-        title: 'Service Worker',
-        url: 'https://news.ycombinator.com/sw.js',
-      },
-      {
-        targetId: 'page-1',
-        type: 'page',
-        title: 'Hacker News',
-        url: 'https://news.ycombinator.com/',
-      },
-    ]);
-
-    expect(target?.targetId).toBe('app-1');
-  });
-
-  it('parses browser websocket URLs from DevToolsActivePort content', () => {
-    const wsUrl = __test__.parseBrowserWebSocketUrlFromActivePort(
-      '9222',
-      '127.0.0.1',
-      '9222\n/devtools/browser/abc-123\n',
-    );
-
-    expect(wsUrl).toBe('ws://127.0.0.1:9222/devtools/browser/abc-123');
-  });
-
-  it('parses auto-discovered browser websocket URLs from DevToolsActivePort content', () => {
-    const wsUrl = __test__.parseAnyBrowserWebSocketUrlFromActivePort(
-      '9333\n/devtools/browser/abc-123\n',
-      '127.0.0.1',
-    );
-
-    expect(wsUrl).toBe('ws://127.0.0.1:9333/devtools/browser/abc-123');
-  });
-
-  it('extracts browser websocket URLs from /json/version payloads', () => {
-    expect(__test__.extractBrowserWebSocketUrlFromVersionPayload({
-      webSocketDebuggerUrl: 'ws://127.0.0.1:9222/devtools/browser/abc',
-    })).toBe('ws://127.0.0.1:9222/devtools/browser/abc');
-  });
-
-  it('rewrites loopback /json/version browser websocket URLs onto proxied endpoints', () => {
-    expect(__test__.rewriteBrowserWebSocketUrlForEndpoint(
-      'https://demo.ngrok.app',
-      'ws://127.0.0.1:9222/devtools/browser/abc',
-    )).toBe('wss://demo.ngrok.app/devtools/browser/abc');
-  });
-
-  it('rewrites loopback /json page websocket URLs onto proxied endpoints too', () => {
-    expect(__test__.rewriteBrowserWebSocketUrlForEndpoint(
-      'https://demo.ngrok.app',
-      'ws://127.0.0.1:9222/devtools/page/abc',
-    )).toBe('wss://demo.ngrok.app/devtools/page/abc');
-  });
-
-  it('detects browser-level websocket endpoints', () => {
-    expect(__test__.isBrowserLevelWebSocket('ws://127.0.0.1:9222/devtools/browser/abc')).toBe(true);
-    expect(__test__.isBrowserLevelWebSocket('ws://127.0.0.1:9222/devtools/page/abc')).toBe(false);
-  });
-
-  it('accepts IPv6 loopback hosts for local browser websocket fallback', () => {
-    expect(__test__.isLoopbackHost('[::1]')).toBe(true);
-    expect(__test__.isLoopbackHost('::1')).toBe(true);
-    expect(__test__.isLoopbackHost('192.168.0.10')).toBe(false);
-  });
-
-  it('prefers a fresh target only for auto-discovered browser sessions without an explicit target hint', () => {
-    expect(__test__.shouldPreferNewBrowserTarget('auto')).toBe(true);
-
-    vi.stubEnv('OPENCLI_CDP_TARGET', 'linux.do');
-    expect(__test__.shouldPreferNewBrowserTarget('auto')).toBe(false);
-    expect(__test__.shouldPreferNewBrowserTarget('http://127.0.0.1:9222')).toBe(false);
-  });
-
-  it('normalizes blank workspaces away before persistence decisions', () => {
-    expect(__test__.normalizeWorkspaceKey('  site:twitter  ')).toBe('site:twitter');
-    expect(__test__.normalizeWorkspaceKey('   ')).toBeUndefined();
-  });
-
-  it('matches cached browser targets for app/webview tabs too', () => {
-    const target = __test__.selectTargetById([
-      {
-        targetId: 'webview-1',
-        type: 'webview',
-        title: 'Embedded App',
-        url: 'https://embedded.example/app',
-      },
-    ], 'webview-1');
-
-    expect(target?.targetId).toBe('webview-1');
-  });
-});
-
-describe('CDPBridge lifecycle', () => {
-  beforeEach(() => {
-    vi.unstubAllEnvs();
-    vi.restoreAllMocks();
-    clearPersistentTargetRegistry();
-  });
-
-  it('closes owned blank targets before disconnecting', async () => {
-    const bridge = new CDPBridge() as any;
-    bridge._ws = { readyState: MockWebSocket.OPEN, close: vi.fn() };
-    bridge._ownedTargetId = 'target-1';
-    bridge._closeOwnedTargetOnClose = true;
-
-    const sendSpy = vi.spyOn(bridge, 'send').mockResolvedValue({ success: true });
-
-    await bridge.close();
-
-    expect(sendSpy).toHaveBeenCalledWith(
-      'Target.closeTarget',
-      { targetId: 'target-1' },
-      expect.any(Number),
-      { root: true },
-    );
-  });
-
-  it('keeps workspace-persistent targets open on disconnect', async () => {
-    const bridge = new CDPBridge() as any;
-    bridge._ws = { readyState: MockWebSocket.OPEN, close: vi.fn() };
-    bridge._ownedTargetId = 'target-1';
-    bridge._closeOwnedTargetOnClose = false;
-
-    const sendSpy = vi.spyOn(bridge, 'send').mockResolvedValue({ success: true });
-
-    await bridge.close();
-
-    expect(sendSpy).not.toHaveBeenCalledWith(
-      'Target.closeTarget',
-      expect.anything(),
-      expect.anything(),
-      expect.anything(),
-    );
-  });
-
-  it('resets internal command ids on close', async () => {
-    const bridge = new CDPBridge() as any;
-    bridge._ws = { readyState: MockWebSocket.OPEN, close: vi.fn() };
-    bridge._ownedTargetId = 'target-1';
-    bridge._closeOwnedTargetOnClose = true;
-    bridge._idCounter = 42;
-
-    vi.spyOn(bridge, 'send').mockResolvedValue({ success: true });
-
-    await bridge.close();
-
-    expect(bridge._idCounter).toBe(0);
-  });
-
-  it('reuses a stored workspace target before creating a new browser target', async () => {
-    const bridge = new CDPBridge() as any;
-    bridge._ws = { readyState: MockWebSocket.OPEN, close: vi.fn() };
-
-    fs.writeFileSync(
-      __test__.persistentTargetRegistryPath,
-      JSON.stringify({
-        [__test__.makePersistentTargetRegistryKey('auto', 'site:twitter')]: 'target-keep',
-      }),
-      'utf8',
-    );
-
-    const sendSpy = vi.spyOn(bridge, 'send').mockImplementation(async (...args: unknown[]) => {
-      const method = args[0] as string;
-      switch (method) {
-        case 'Target.getTargets':
-          return {
-            targetInfos: [
-              { targetId: 'target-keep', type: 'page', title: 'X', url: 'https://x.com/home' },
-            ],
-          };
-        case 'Target.activateTarget':
-          return {};
-        case 'Target.attachToTarget':
-          return { sessionId: 'session-1' };
-        default:
-          return {};
-      }
-    });
-
-    await bridge.attachToBrowserTarget({
-      preferNewTarget: true,
-      workspace: 'site:twitter',
-      endpointKey: 'auto',
-    });
-
-    expect(sendSpy).not.toHaveBeenCalledWith(
-      'Target.createTarget',
-      expect.anything(),
-      expect.anything(),
-      expect.anything(),
-    );
-    expect(bridge._sessionId).toBe('session-1');
-  });
-
-  it('lets explicit target hints override a stored workspace target', async () => {
-    const bridge = new CDPBridge() as any;
-    bridge._ws = { readyState: MockWebSocket.OPEN, close: vi.fn() };
-
-    vi.stubEnv('OPENCLI_CDP_TARGET', 'second');
-    fs.writeFileSync(
-      __test__.persistentTargetRegistryPath,
-      JSON.stringify({
-        [__test__.makePersistentTargetRegistryKey('auto', 'site:twitter')]: 'target-keep',
-      }),
-      'utf8',
-    );
-
-    const activated: string[] = [];
-    vi.spyOn(bridge, 'send').mockImplementation(async (...args: unknown[]) => {
-      const method = args[0] as string;
-      const params = args[1] as Record<string, unknown> | undefined;
-      switch (method) {
-        case 'Target.getTargets':
-          return {
-            targetInfos: [
-              { targetId: 'target-keep', type: 'page', title: 'First Tab', url: 'https://x.com/home' },
-              { targetId: 'target-second', type: 'page', title: 'Second Match', url: 'https://second.example' },
-            ],
-          };
-        case 'Target.activateTarget':
-          if (params && typeof params.targetId === 'string') activated.push(params.targetId);
-          return {};
-        case 'Target.attachToTarget':
-          return { sessionId: 'session-2' };
-        default:
-          return {};
-      }
-    });
-
-    await bridge.attachToBrowserTarget({
-      preferNewTarget: true,
-      workspace: 'site:twitter',
-      endpointKey: 'auto',
-    });
-
-    expect(activated).toEqual(['target-second']);
-    expect(fs.readFileSync(__test__.persistentTargetRegistryPath, 'utf8')).toContain('"auto::site:twitter": "target-second"');
-  });
-
-  it('persists newly created workspace targets for later reuse', async () => {
-    const bridge = new CDPBridge() as any;
-    bridge._ws = { readyState: MockWebSocket.OPEN, close: vi.fn() };
-
-    vi.spyOn(bridge, 'send').mockImplementation(async (...args: unknown[]) => {
-      const method = args[0] as string;
-      switch (method) {
-        case 'Target.getTargets':
-          return { targetInfos: [] };
-        case 'Target.createTarget':
-          return { targetId: 'target-new' };
-        case 'Target.activateTarget':
-          return {};
-        case 'Target.attachToTarget':
-          return { sessionId: 'session-1' };
-        default:
-          return {};
-      }
-    });
-
-    await bridge.attachToBrowserTarget({
-      preferNewTarget: true,
-      workspace: 'site:twitter',
-      endpointKey: 'auto',
-    });
-
-    expect(fs.existsSync(__test__.persistentTargetRegistryPath)).toBe(true);
-    expect(fs.readFileSync(__test__.persistentTargetRegistryPath, 'utf8')).toContain('"auto::site:twitter": "target-new"');
-    expect(bridge._closeOwnedTargetOnClose).toBe(false);
-  });
-});
-
-describe('CDPPage navigation', () => {
-  beforeEach(() => {
-    vi.unstubAllEnvs();
-  });
-
-  it('surfaces Page.navigate errorText directly', async () => {
+  it('retains one redirect chain and drains it after the final response', async () => {
     vi.stubEnv('OPENCLI_CDP_ENDPOINT', 'ws://127.0.0.1:9222/devtools/page/1');
-
     const bridge = new CDPBridge();
-    vi.spyOn(bridge, 'send')
-      .mockResolvedValueOnce({})
-      .mockResolvedValueOnce({})
-      .mockResolvedValueOnce({})
-      .mockResolvedValueOnce({ errorText: 'net::ERR_NAME_NOT_RESOLVED' });
-    vi.spyOn(bridge, 'waitForEvent').mockRejectedValue(new Error('should not be awaited after errorText'));
-
+    vi.spyOn(bridge, 'send').mockResolvedValue({ body: 'final answer', base64Encoded: false });
     const page = await bridge.connect();
-
-    await expect(page.goto('http://oops-typo.com')).rejects.toThrow('net::ERR_NAME_NOT_RESOLVED');
+    await page.startNetworkCapture?.('api.example');
+    const fire = (method: string, params: unknown) => MockWebSocket.lastInstance?.emit('message',
+      Buffer.from(JSON.stringify({ method, params })));
+    fire('Network.requestWillBeSent', { requestId: 'redirect', request: {
+      method: 'POST', url: 'https://api.example/start', hasPostData: true, postData: 'original payload',
+    } });
+    await page.readNetworkCapture?.({ retainIncomplete: true });
+    fire('Network.requestWillBeSent', { requestId: 'redirect', redirectResponse: { status: 302 }, request: {
+      method: 'GET', url: 'https://api.example/finish',
+    } });
+    fire('Network.responseReceived', { requestId: 'redirect', response: { status: 200 } });
+    fire('Network.loadingFinished', { requestId: 'redirect' });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(await page.readNetworkCapture?.({ retainIncomplete: true })).toEqual([
+      expect.objectContaining({ requestId: 'redirect', method: 'POST', requestBodyPreview: 'original payload',
+        responsePreview: 'final answer', captureComplete: true }),
+    ]);
+    expect(await page.readNetworkCapture?.({ retainIncomplete: true })).toEqual([]);
   });
 
-  it('does not leave an unhandled rejection behind when Page.navigate throws', async () => {
-    vi.useFakeTimers();
+  it('reindexes remaining requests after a completed entry is drained', async () => {
+    vi.stubEnv('OPENCLI_CDP_ENDPOINT', 'ws://127.0.0.1:9222/devtools/page/1');
+    const bridge = new CDPBridge();
+    vi.spyOn(bridge, 'send').mockResolvedValue({ body: 'body', base64Encoded: false });
+    const page = await bridge.connect();
+    await page.startNetworkCapture?.('api.example');
+    const fire = (method: string, params: unknown) => MockWebSocket.lastInstance?.emit('message',
+      Buffer.from(JSON.stringify({ method, params })));
+    for (const requestId of ['done', 'pending']) {
+      fire('Network.requestWillBeSent', { requestId, request: { method: 'GET', url: 'https://api.example/' + requestId } });
+    }
+    fire('Network.loadingFailed', { requestId: 'done' });
+    expect(await page.readNetworkCapture?.({ retainIncomplete: true })).toHaveLength(2);
+    fire('Network.responseReceived', { requestId: 'pending', response: { status: 201 } });
+    fire('Network.loadingFinished', { requestId: 'pending' });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(await page.readNetworkCapture?.({ retainIncomplete: true })).toEqual([
+      expect.objectContaining({ requestId: 'pending', responseStatus: 201, responsePreview: 'body', captureComplete: true }),
+    ]);
+    expect(await page.readNetworkCapture?.({ retainIncomplete: true })).toEqual([]);
+  });
+
+  it('retains an early-read request until the delayed response body completes', async () => {
+    vi.stubEnv('OPENCLI_CDP_ENDPOINT', 'ws://127.0.0.1:9222/devtools/page/1');
+    const bridge = new CDPBridge();
+    let releaseBody!: (value: unknown) => void;
+    const body = new Promise(resolve => { releaseBody = resolve; });
+    vi.spyOn(bridge, 'send').mockImplementation(async (method: string) =>
+      method === 'Network.getResponseBody' ? body : {});
+    const page = await bridge.connect();
+    await page.startNetworkCapture?.('api.example');
+    const fire = (method: string, params: unknown) => MockWebSocket.lastInstance?.emit('message',
+      Buffer.from(JSON.stringify({ method, params })));
+    fire('Network.requestWillBeSent', { requestId: 'r2', request: { method: 'POST', url: 'https://api.example/gen', postData: '{}', hasPostData: true } });
+    const early = await page.readNetworkCapture?.({ retainIncomplete: true }) as Array<Record<string, unknown>>;
+    expect(early[0].responsePreview).toBeUndefined();
+    fire('Network.responseReceived', { requestId: 'r2', response: { status: 200 } });
+    fire('Network.loadingFinished', { requestId: 'r2' });
+    releaseBody({ body: '{"clips":[]}', base64Encoded: false });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    const completed = await page.readNetworkCapture?.({ retainIncomplete: true }) as Array<Record<string, unknown>>;
+    expect(completed[0]).toMatchObject({ responseStatus: 200, responsePreview: '{"clips":[]}', captureComplete: true });
+    expect(completed[0].requestId).toBe('r2');
+    expect(await page.readNetworkCapture?.({ retainIncomplete: true })).toEqual([]);
+  });
+
+  it('does not complete a capture before its delayed request post data arrives', async () => {
+    vi.stubEnv('OPENCLI_CDP_ENDPOINT', 'ws://127.0.0.1:9222/devtools/page/1');
+    const bridge = new CDPBridge();
+    let releasePostData!: (value: unknown) => void;
+    const postData = new Promise(resolve => { releasePostData = resolve; });
+    vi.spyOn(bridge, 'send').mockImplementation(async (method: string) =>
+      method === 'Network.getRequestPostData' ? postData : { body: '{"ok":1}', base64Encoded: false });
+    const page = await bridge.connect();
+    await page.startNetworkCapture?.('api.example');
+    const fire = (method: string, params: unknown) => MockWebSocket.lastInstance?.emit('message',
+      Buffer.from(JSON.stringify({ method, params })));
+    fire('Network.requestWillBeSent', { requestId: 'r3', request: { method: 'POST', url: 'https://api.example/gen', hasPostData: true } });
+    fire('Network.responseReceived', { requestId: 'r3', response: { status: 200 } });
+    fire('Network.loadingFinished', { requestId: 'r3' });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    // Response body is settled, but the request body fetch has not landed:
+    // the entry must stay incomplete so a retaining read keeps it.
+    const beforePostData = await page.readNetworkCapture?.({ retainIncomplete: true }) as Array<Record<string, unknown>>;
+    expect(beforePostData[0].responsePreview).toBe('{"ok":1}');
+    expect(beforePostData[0].captureComplete).toBe(false);
+    releasePostData({ postData: '{"mv":"v6"}' });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    const complete = await page.readNetworkCapture?.({ retainIncomplete: true }) as Array<Record<string, unknown>>;
+    expect(complete[0]).toMatchObject({ requestBodyPreview: '{"mv":"v6"}', captureComplete: true });
+    expect(await page.readNetworkCapture?.({ retainIncomplete: true })).toEqual([]);
+  });
+
+  it('returns a retaining snapshot without waiting on a stalled response body fetch', async () => {
+    vi.stubEnv('OPENCLI_CDP_ENDPOINT', 'ws://127.0.0.1:9222/devtools/page/1');
+    const bridge = new CDPBridge();
+    vi.spyOn(bridge, 'send').mockImplementation(async (method: string) =>
+      method === 'Network.getResponseBody' ? new Promise(() => {}) : {});
+    const page = await bridge.connect();
+    await page.startNetworkCapture?.('api.example');
+    const fire = (method: string, params: unknown) => MockWebSocket.lastInstance?.emit('message',
+      Buffer.from(JSON.stringify({ method, params })));
+    fire('Network.requestWillBeSent', { requestId: 'r4', request: { method: 'POST', url: 'https://api.example/gen', postData: '{}', hasPostData: true } });
+    fire('Network.responseReceived', { requestId: 'r4', response: { status: 200 } });
+    fire('Network.loadingFinished', { requestId: 'r4' });
+    const reading = page.readNetworkCapture?.({ retainIncomplete: true }) as Promise<Array<Record<string, unknown>>>;
+    const snapshot = await Promise.race([
+      reading,
+      new Promise((_, reject) => setTimeout(() => reject(new Error('retaining read blocked on a stalled body fetch')), 50)),
+    ]) as Array<Record<string, unknown>>;
+    expect(snapshot[0]).toMatchObject({ requestId: 'r4', responseStatus: 200 });
+    expect(snapshot[0].responsePreview).toBeUndefined();
+  });
+});
+
+describe('CDPBridge init script', () => {
+  const tempDirs: string[] = [];
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+  beforeEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  const initScripts = (calls: unknown[][]) => calls
+    .filter(([method]) => method === 'Page.addScriptToEvaluateOnNewDocument')
+    .map(([, params]) => (params as { source: string }).source);
+
+  it('registers OPENCLI_CDP_INIT_SCRIPT after the stealth script', async () => {
+    vi.stubEnv('OPENCLI_CDP_ENDPOINT', 'ws://127.0.0.1:9222/devtools/page/1');
+    const dir = mkdtempSync(join(tmpdir(), 'opencli-init-'));
+    tempDirs.push(dir);
+    const file = join(dir, 'init.js');
+    writeFileSync(file, 'window.__opencliInit = 1;');
+    vi.stubEnv('OPENCLI_CDP_INIT_SCRIPT', file);
+
+    const bridge = new CDPBridge();
+    const send = vi.spyOn(bridge, 'send').mockResolvedValue({});
+    await bridge.connect();
+
+    const sources = initScripts(send.mock.calls);
+    expect(sources).toHaveLength(2);
+    expect(sources[1]).toBe('window.__opencliInit = 1;');
+    await bridge.close();
+  });
+
+  it.skipIf(process.platform === 'win32')('rejects a FIFO before opening a CDP connection', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'opencli-init-'));
+    tempDirs.push(dir);
+    const file = join(dir, 'init.pipe');
+    execFileSync('mkfifo', [file]);
+    vi.stubEnv('OPENCLI_CDP_INIT_SCRIPT', file);
+    const previousSocket = MockWebSocket.lastInstance;
+    await expect(new CDPBridge().connect({ cdpEndpoint: 'ws://127.0.0.1:9222' }))
+      .rejects.toThrow('regular JavaScript file');
+    expect(MockWebSocket.lastInstance).toBe(previousSocket);
+  });
+
+  it('registers only the stealth script when unset', async () => {
     vi.stubEnv('OPENCLI_CDP_ENDPOINT', 'ws://127.0.0.1:9222/devtools/page/1');
 
     const bridge = new CDPBridge();
-    vi.spyOn(bridge, 'send')
-      .mockResolvedValueOnce({})
-      .mockResolvedValueOnce({})
-      .mockResolvedValueOnce({})
-      .mockRejectedValueOnce(new Error('Target closed'));
-    vi.spyOn(bridge, 'waitForEvent').mockImplementation(() =>
-      new Promise((_, reject) => setTimeout(() => reject(new Error('load timeout')), 10))
-    );
+    const send = vi.spyOn(bridge, 'send').mockResolvedValue({});
+    await bridge.connect();
 
-    const unhandled: unknown[] = [];
-    const onUnhandled = (reason: unknown) => {
-      unhandled.push(reason);
-    };
-    process.on('unhandledRejection', onUnhandled);
+    expect(initScripts(send.mock.calls)).toHaveLength(1);
+    await bridge.close();
+  });
+});
 
-    try {
-      const page = await bridge.connect();
-      await expect(page.goto('https://example.com')).rejects.toThrow('Target closed');
-      await vi.runAllTimersAsync();
-      await Promise.resolve();
-      expect(unhandled).toEqual([]);
-    } finally {
-      process.off('unhandledRejection', onUnhandled);
-      vi.useRealTimers();
-    }
+describe('CDPPage.evaluateOnce', () => {
+  it('does not resend Runtime.evaluate after a target navigation', async () => {
+    vi.stubEnv('OPENCLI_CDP_ENDPOINT', 'ws://127.0.0.1:9222/devtools/page/1');
+    const bridge = new CDPBridge();
+    const send = vi.spyOn(bridge, 'send').mockResolvedValue({});
+    const page = await bridge.connect();
+    send.mockClear();
+    const error = new Error('Inspected target navigated or closed');
+    send.mockRejectedValue(error);
+    await expect(page.evaluateOnce!('publishComment()')).rejects.toBe(error);
+    expect(send).toHaveBeenCalledTimes(1);
+    await bridge.close();
+    vi.unstubAllEnvs();
   });
 });
