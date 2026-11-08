@@ -80,7 +80,22 @@ describe('browser autostart configuration', () => {
     expect(spawnSpy).toHaveBeenCalledWith('/usr/bin/chromium', ['--user-data-dir=/tmp/opencli']);
   });
 
-  it('does not spawn a configured browser from Windows Session 0', async () => {
+  it('spawns and tracks a configured browser from Windows Session 0 by default', async () => {
+    saveBrowserAutostartConfig({ executable: 'chrome.exe', args: ['--user-data-dir=C:\\Workspace\\chrome-debug'] });
+    vi.spyOn(windowsSessionHooks, 'platform').mockReturnValue('win32');
+    vi.spyOn(windowsSessionHooks, 'getCurrentSessionId').mockReturnValue(0);
+    const spawnSpy = vi.spyOn(browserAutostartHooks, 'spawnConfiguredBrowser').mockResolvedValue({ pid: 8888 });
+
+    await expect(launchConfiguredBrowser()).resolves.toMatchObject({
+      attempted: true,
+      launched: true,
+      pid: 8888,
+    });
+    expect(spawnSpy).toHaveBeenCalledWith('chrome.exe', ['--user-data-dir=C:\\Workspace\\chrome-debug']);
+  });
+
+  it('refuses to spawn from Windows Session 0 when explicitly disabled', async () => {
+    vi.stubEnv('OPENCLI_ALLOW_SESSION0_AUTOSTART', '0');
     saveBrowserAutostartConfig({ executable: 'chrome.exe', args: ['--user-data-dir=C:\\Workspace\\chrome-debug'] });
     vi.spyOn(windowsSessionHooks, 'platform').mockReturnValue('win32');
     vi.spyOn(windowsSessionHooks, 'getCurrentSessionId').mockReturnValue(0);

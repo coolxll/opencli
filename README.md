@@ -169,7 +169,8 @@ When the site you need is not yet covered, use the `opencli-adapter-author` skil
 | `OPENCLI_SITE_SESSION` | adapter default | Set to `ephemeral` or `persistent` to override `siteSession` metadata for browser-backed adapter commands. `ephemeral` closes the one-shot automation window when the command finishes; `persistent` reuses the site's session. Per-command `--site-session` takes precedence. |
 | `OPENCLI_BROWSER_CONNECT_TIMEOUT` | `45` | Seconds to wait for browser connection |
 | `OPENCLI_BROWSER_COMMAND_TIMEOUT` | `60` | Seconds to wait for a single browser command |
-| `OPENCLI_ALLOW_SESSION0_AUTOSTART` | unset | Windows and WSL: explicitly allow daemon/browser auto-start in non-interactive Session 0. By default OpenCLI requires process creation to happen in a signed-in desktop session. |
+| `OPENCLI_ALLOW_SESSION0_AUTOSTART` | unset | Windows and WSL: control daemon/browser auto-start in non-interactive Session 0. Controlled execution (with auto-exit and profile lock release) is allowed by default; set to `0` or `false` to block Session 0 process creation. |
+| `OPENCLI_SESSION0_IDLE_TIMEOUT` | `60` | Windows Session 0: seconds of inactivity before daemon shuts down and releases browser profile lock |
 | `OPENCLI_CDP_ENDPOINT` | — | Chrome DevTools Protocol endpoint for remote browser or Electron apps |
 
 | `OPENCLI_CDP_TARGET` | — | Filter CDP targets by URL substring (e.g. `detail.1688.com`) |

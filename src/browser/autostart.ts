@@ -2,7 +2,8 @@ import { spawn } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { getWindowsSessionAutostartBlock } from '../windows-session.js';
+import { getWindowsSessionAutostartBlock, isWindowsSession0 } from '../windows-session.js';
+import { extractUserDataDir, trackBrowserProcess } from './session0-tracker.js';
 
 export interface BrowserAutostartConfig {
   version: 1;
@@ -22,7 +23,7 @@ export type BrowserAutostartLaunchResult =
   | { attempted: false; reason: 'disabled' | 'invalid-config' }
   | { attempted: false; reason: 'windows-session-0'; error: string }
   | { attempted: true; launched: false; reason: 'already-running'; config: BrowserAutostartConfig }
-  | { attempted: true; launched: true; config: BrowserAutostartConfig }
+  | { attempted: true; launched: true; config: BrowserAutostartConfig; pid?: number }
   | { attempted: true; launched: false; reason: 'launch-failed'; error: string; config: BrowserAutostartConfig };
 
 function configDir(): string {
@@ -145,8 +146,8 @@ async function probeConfiguredBrowser(url: string): Promise<boolean> {
   }
 }
 
-async function spawnConfiguredBrowser(executable: string, args: string[]): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
+async function spawnConfiguredBrowser(executable: string, args: string[]): Promise<{ pid?: number } | void> {
+  return await new Promise<{ pid?: number }>((resolve, reject) => {
     const child = spawn(executable, args, {
       detached: true,
       stdio: 'ignore',
@@ -157,7 +158,7 @@ async function spawnConfiguredBrowser(executable: string, args: string[]): Promi
     child.once('spawn', () => {
       child.off('error', onError);
       child.unref();
-      resolve();
+      resolve({ pid: child.pid });
     });
   });
 }
@@ -187,8 +188,21 @@ export async function launchConfiguredBrowser(): Promise<BrowserAutostartLaunchR
   }
 
   try {
-    await browserAutostartHooks.spawnConfiguredBrowser(config.executable, config.args);
-    return { attempted: true, launched: true, config };
+    const spawnResult = await browserAutostartHooks.spawnConfiguredBrowser(config.executable, config.args);
+    const pid = spawnResult && typeof spawnResult === 'object' ? spawnResult.pid : undefined;
+
+    if (isWindowsSession0()) {
+      trackBrowserProcess({
+        pid,
+        executable: config.executable,
+        args: config.args,
+        probeUrl: config.probeUrl,
+        userDataDir: extractUserDataDir(config.args),
+        launchedAt: Date.now(),
+      });
+    }
+
+    return { attempted: true, launched: true, config, ...(pid !== undefined ? { pid } : {}) };
   } catch (err) {
     return {
       attempted: true,

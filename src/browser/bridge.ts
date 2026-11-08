@@ -7,8 +7,15 @@ import type { IBrowserFactory } from '../runtime.js';
 import { Page } from './page.js';
 import { profileRouteParams, resolveProfileSelection } from './profile.js';
 import { ensureBrowserBridgeReady } from './daemon-lifecycle.js';
+import { isWindowsSession0 } from '../windows-session.js';
+import { closeAllTrackedBrowsers } from './session0-tracker.js';
 
 const DAEMON_SPAWN_TIMEOUT = 10000; // 10s to wait for daemon + extension
+
+function shouldCloseBrowsersOnTaskEnd(env: NodeJS.ProcessEnv = process.env): boolean {
+  const val = env.OPENCLI_SESSION0_CLOSE_ON_EXIT?.trim().toLowerCase();
+  return val === '1' || val === 'true' || val === 'yes' || val === 'on';
+}
 
 export type BrowserBridgeState = 'idle' | 'connecting' | 'connected' | 'closing' | 'closed';
 
@@ -57,6 +64,9 @@ export class BrowserBridge implements IBrowserFactory {
     // Just clean up our reference.
     this._page = null;
     this._state = 'closed';
+    if (isWindowsSession0() && shouldCloseBrowsersOnTaskEnd()) {
+      await closeAllTrackedBrowsers().catch(() => {});
+    }
   }
 
   private async _ensureDaemon(timeoutSeconds?: number, contextId?: string, preferredContextId?: string): Promise<void> {

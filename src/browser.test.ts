@@ -308,7 +308,35 @@ describe('BrowserBridge state', () => {
     await expect(bridge.connect({ timeout: 0.1 })).rejects.toThrow('Stale daemon could not be replaced');
   });
 
-  it('does not replace a stale daemon from Windows Session 0', async () => {
+  it('replaces a stale daemon from Windows Session 0 by default', async () => {
+    vi.spyOn(windowsSessionHooks, 'platform').mockReturnValue('win32');
+    vi.spyOn(windowsSessionHooks, 'getCurrentSessionId').mockReturnValue(0);
+    vi.spyOn(daemonTransport, 'getDaemonHealth').mockResolvedValue({
+      state: 'ready',
+      status: {
+        ok: true,
+        pid: 999999,
+        uptime: 0,
+        daemonVersion: '0.0.1',
+        extensionConnected: true,
+        pending: 0,
+        memoryMB: 0,
+        port: 19825,
+      },
+    });
+    const shutdownSpy = vi.spyOn(daemonLifecycle.daemonLifecycleHooks, 'requestDaemonShutdown').mockResolvedValue(true);
+    vi.spyOn(daemonLifecycle.daemonLifecycleHooks, 'waitForDaemonStop').mockResolvedValue(true);
+    const spawnSpy = vi.spyOn(daemonLifecycle.daemonLifecycleHooks, 'spawnDaemonProcess').mockReturnValue({} as any);
+
+    const bridge = new BrowserBridge();
+
+    await bridge.connect({ timeout: 0.1, session: 'test' }).catch(() => {});
+    expect(shutdownSpy).toHaveBeenCalled();
+    expect(spawnSpy).toHaveBeenCalled();
+  });
+
+  it('refuses to replace a stale daemon from Windows Session 0 when explicitly disabled', async () => {
+    vi.stubEnv('OPENCLI_ALLOW_SESSION0_AUTOSTART', '0');
     vi.spyOn(windowsSessionHooks, 'platform').mockReturnValue('win32');
     vi.spyOn(windowsSessionHooks, 'getCurrentSessionId').mockReturnValue(0);
     vi.spyOn(daemonTransport, 'getDaemonHealth').mockResolvedValue({
@@ -328,11 +356,24 @@ describe('BrowserBridge state', () => {
 
     const bridge = new BrowserBridge();
 
-    await expect(bridge.connect({ timeout: 0.1 })).rejects.toThrow('cannot be replaced from Windows Session 0');
+    await expect(bridge.connect({ timeout: 0.1, session: 'test' })).rejects.toThrow('cannot be replaced from Windows Session 0');
     expect(shutdownSpy).not.toHaveBeenCalled();
   });
 
-  it('does not start a stopped daemon from Windows Session 0', async () => {
+  it('starts a stopped daemon from Windows Session 0 by default', async () => {
+    vi.spyOn(windowsSessionHooks, 'platform').mockReturnValue('win32');
+    vi.spyOn(windowsSessionHooks, 'getCurrentSessionId').mockReturnValue(0);
+    vi.spyOn(daemonTransport, 'getDaemonHealth').mockResolvedValue({ state: 'stopped', status: null });
+    const spawnSpy = vi.spyOn(daemonLifecycle.daemonLifecycleHooks, 'spawnDaemonProcess').mockReturnValue({} as any);
+
+    const bridge = new BrowserBridge();
+
+    await bridge.connect({ timeout: 0.1, session: 'test' }).catch(() => {});
+    expect(spawnSpy).toHaveBeenCalled();
+  });
+
+  it('refuses to start a stopped daemon from Windows Session 0 when explicitly disabled', async () => {
+    vi.stubEnv('OPENCLI_ALLOW_SESSION0_AUTOSTART', '0');
     vi.spyOn(windowsSessionHooks, 'platform').mockReturnValue('win32');
     vi.spyOn(windowsSessionHooks, 'getCurrentSessionId').mockReturnValue(0);
     vi.spyOn(daemonTransport, 'getDaemonHealth').mockResolvedValue({ state: 'stopped', status: null });
@@ -340,7 +381,7 @@ describe('BrowserBridge state', () => {
 
     const bridge = new BrowserBridge();
 
-    await expect(bridge.connect({ timeout: 0.1 })).rejects.toThrow('Session 0');
+    await expect(bridge.connect({ timeout: 0.1, session: 'test' })).rejects.toThrow('Session 0');
     expect(spawnSpy).not.toHaveBeenCalled();
   });
 

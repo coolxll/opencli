@@ -5,7 +5,8 @@ import * as path from 'node:path';
 import { DEFAULT_DAEMON_PORT } from '../constants.js';
 import { BrowserConnectError } from '../errors.js';
 import { PKG_VERSION } from '../version.js';
-import { getWindowsSessionAutostartBlock } from '../windows-session.js';
+import { getWindowsSessionAutostartBlock, isWindowsSession0 } from '../windows-session.js';
+import { extractUserDataDir } from './session0-tracker.js';
 import { waitForBridgeReady } from './bridge-readiness.js';
 import { launchConfiguredBrowser } from './autostart.js';
 import { fetchDaemonStatus, getDaemonHealth, requestDaemonShutdown, type DaemonHealth, type DaemonStatus } from './daemon-transport.js';
@@ -49,7 +50,10 @@ export function spawnDaemonProcess(): ChildProcess {
   const proc = spawn(launch.binary, launch.args, {
     detached: true,
     stdio: 'ignore',
-    env: { ...process.env },
+    env: {
+      ...process.env,
+      ...(isWindowsSession0() ? { OPENCLI_WINDOWS_SESSION: '0' } : {}),
+    },
   });
   proc.unref();
   return proc;
@@ -203,6 +207,21 @@ export async function ensureBrowserBridgeReady(
     if (observedHealth.state === 'no-extension') {
       const launch = await daemonLifecycleHooks.launchConfiguredBrowser();
       if (launch.attempted && launch.launched) {
+        if (isWindowsSession0()) {
+          void fetch(`http://127.0.0.1:${DEFAULT_DAEMON_PORT}/browser/register`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-OpenCLI': '1' },
+            body: JSON.stringify({
+              pid: launch.pid,
+              executable: launch.config.executable,
+              args: launch.config.args,
+              probeUrl: launch.config.probeUrl,
+              userDataDir: extractUserDataDir(launch.config.args),
+              launchedAt: Date.now(),
+            }),
+            signal: AbortSignal.timeout(1000),
+          }).catch(() => {});
+        }
         if (verbose && (process.env.OPENCLI_VERBOSE || process.stderr.isTTY)) {
           process.stderr.write('🚀 Launching configured browser for Browser Bridge...\n');
         }

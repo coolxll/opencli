@@ -28,7 +28,9 @@ import { log } from './logger.js';
 import { PKG_VERSION } from './version.js';
 import { DEFAULT_CONTEXT_ID } from './browser/profile.js';
 import { recordExtensionVersion } from './update-check.js';
-import { getWindowsSessionAutostartBlock } from './windows-session.js';
+import { getWindowsSessionAutostartBlock, isWindowsSession0 } from './windows-session.js';
+import { Session0IdleManager, getSession0IdleTimeoutMs } from './daemon-session0.js';
+import { closeAllTrackedBrowsers, trackBrowserProcess, type TrackedBrowser } from './browser/session0-tracker.js';
 import {
   PROFILE_DISCONNECTED_HINT,
   buildCommandDispatchFailure,
@@ -54,6 +56,20 @@ if (sessionBlock) {
 if (!isIgnorableDaemonPortEnv(process.env.OPENCLI_DAEMON_PORT)) {
   log.error(unsupportedDaemonPortEnvMessage(process.env.OPENCLI_DAEMON_PORT));
   process.exit(EXIT_CODES.USAGE_ERROR);
+}
+
+const isSession0 = isWindowsSession0();
+const session0IdleManager = new Session0IdleManager({
+  isSession0,
+  timeoutMs: getSession0IdleTimeoutMs(),
+  onTimeout: () => {
+    log.info('[daemon] Windows Session 0 idle timeout reached; initiating shutdown.');
+    void shutdown();
+  },
+});
+if (isSession0) {
+  log.info(`[daemon] Windows Session 0 detected: idle auto-exit (${session0IdleManager.timeoutMs / 1000}s) and browser lifecycle cleanup enabled.`);
+  session0IdleManager.onIdle(0);
 }
 
 // ─── State ───────────────────────────────────────────────────────────
@@ -117,6 +133,7 @@ function settlePending(id: string, entry: PendingEntry, outcome: { data?: unknow
     if (outcome.error) settler.reject(outcome.error);
     else settler.resolve(outcome.data);
   }
+  session0IdleManager.onIdle(pending.size);
 }
 let commandResultUnknownCount = 0;
 // Extension log ring buffer
@@ -348,13 +365,27 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
     return;
   }
 
+  if (req.method === 'POST' && pathname === '/browser/register') {
+    try {
+      const body = JSON.parse(await readBody(req)) as TrackedBrowser;
+      if (body && typeof body === 'object') {
+        trackBrowserProcess(body);
+      }
+      jsonResponse(res, 200, { ok: true });
+    } catch {
+      jsonResponse(res, 400, { ok: false, error: 'Invalid browser registration payload' });
+    }
+    return;
+  }
+
   if (req.method === 'POST' && pathname === '/shutdown') {
     jsonResponse(res, 200, { ok: true, message: 'Shutting down' });
-    setTimeout(() => shutdown(), 100);
+    setTimeout(() => { void shutdown(); }, 100);
     return;
   }
 
   if (req.method === 'POST' && url === '/command') {
+    session0IdleManager.onActivity();
     try {
       const body = JSON.parse(await readBody(req));
       if (!body.id) {
@@ -611,7 +642,8 @@ httpServer.on('error', (err: NodeJS.ErrnoException) => {
 });
 
 // Graceful shutdown
-function shutdown(): void {
+async function shutdown(): Promise<void> {
+  session0IdleManager.stop();
   // Reject all pending requests so the CLI gets a structured response it can
   // act on instead of a socket hang-up it must treat as result-unknown.
   // Not-yet-dispatched commands get the pre-dispatch contract (safe to resend
@@ -633,6 +665,13 @@ function shutdown(): void {
   }
   pending.clear();
   for (const profile of extensionProfiles.values()) profile.ws.close();
+
+  try {
+    await closeAllTrackedBrowsers();
+  } catch (err) {
+    log.error(`[daemon] Error closing tracked browsers during shutdown: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
   // Let the rejection responses flush before exiting — a synchronous
   // process.exit() would kill the queued microtasks that write them.
   httpServer.close(() => process.exit(EXIT_CODES.SUCCESS));
@@ -642,5 +681,5 @@ function shutdown(): void {
   }, 100).unref();
 }
 
-process.on('SIGTERM', shutdown);
-process.on('SIGINT', shutdown);
+process.on('SIGTERM', () => { void shutdown(); });
+process.on('SIGINT', () => { void shutdown(); });

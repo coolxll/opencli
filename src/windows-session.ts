@@ -10,6 +10,11 @@ export interface WindowsSessionAutostartBlock {
 }
 
 function queryCurrentWindowsSessionId(): number | null {
+  const envSession = process.env.OPENCLI_WINDOWS_SESSION;
+  if (envSession !== undefined && /^\d+$/.test(envSession.trim())) {
+    return Number.parseInt(envSession.trim(), 10);
+  }
+
   const systemRoot = process.env.SystemRoot || process.env.WINDIR;
   const executables = [
     ...(systemRoot
@@ -49,9 +54,9 @@ function queryCurrentWindowsSessionId(): number | null {
   return null;
 }
 
-function envAllowsSession0Autostart(env: NodeJS.ProcessEnv): boolean {
+function envDisallowsSession0Autostart(env: NodeJS.ProcessEnv): boolean {
   const value = env[WINDOWS_SESSION0_AUTOSTART_ENV]?.trim().toLowerCase();
-  return value === '1' || value === 'true' || value === 'yes' || value === 'on';
+  return value === '0' || value === 'false' || value === 'no' || value === 'off';
 }
 
 function isWslWindowsHost(env: NodeJS.ProcessEnv): boolean {
@@ -66,11 +71,19 @@ export const windowsSessionHooks = {
   getCurrentSessionId: queryCurrentWindowsSessionId,
 };
 
+export function isWindowsSession0(env: NodeJS.ProcessEnv = process.env): boolean {
+  const platform = windowsSessionHooks.platform();
+  const hasWindowsHost = platform === 'win32'
+    || (platform === 'linux' && windowsSessionHooks.isWslWindowsHost(env));
+  if (!hasWindowsHost) return false;
+  return windowsSessionHooks.getCurrentSessionId() === 0;
+}
+
 /**
- * Windows Session 0 is a non-interactive service session. GUI Chrome processes
- * started there cannot participate in the signed-in user's desktop session.
- * Existing localhost services remain reusable; only process creation is
- * blocked by this policy.
+ * Windows Session 0 is a non-interactive service session.
+ * Controlled background process execution is permitted by default (with auto-exit and
+ * browser lifecycle tracking). If explicitly disabled via OPENCLI_ALLOW_SESSION0_AUTOSTART=0,
+ * process creation is blocked.
  */
 export function getWindowsSessionAutostartBlock(
   env: NodeJS.ProcessEnv = process.env,
@@ -79,16 +92,20 @@ export function getWindowsSessionAutostartBlock(
   const hasWindowsHost = platform === 'win32'
     || (platform === 'linux' && windowsSessionHooks.isWslWindowsHost(env));
   if (!hasWindowsHost) return null;
-  if (envAllowsSession0Autostart(env)) return null;
 
   const sessionId = windowsSessionHooks.getCurrentSessionId();
   if (sessionId !== 0) return null;
 
-  return {
-    sessionId,
-    message: 'Refusing to start OpenCLI background processes in Windows Session 0',
-    hint:
-      'Start the OpenCLI daemon and Chrome from the signed-in desktop session (for example, a Task Scheduler task configured with "Run only when user is logged on"). ' +
-      `Set ${WINDOWS_SESSION0_AUTOSTART_ENV}=1 only if Session 0 startup is intentional.`,
-  };
+  // Controlled execution is enabled by default. Only block if explicitly disabled.
+  if (envDisallowsSession0Autostart(env)) {
+    return {
+      sessionId,
+      message: 'Refusing to start OpenCLI background processes in Windows Session 0 (explicitly disabled)',
+      hint:
+        'Start the OpenCLI daemon and Chrome from the signed-in desktop session (for example, a Task Scheduler task configured with "Run only when user is logged on"), ' +
+        `or unset ${WINDOWS_SESSION0_AUTOSTART_ENV}=0 to allow controlled Session 0 execution.`,
+    };
+  }
+
+  return null;
 }
