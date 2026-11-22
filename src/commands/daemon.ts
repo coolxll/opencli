@@ -1,6 +1,6 @@
 /** Structured daemon lifecycle commands. */
-import { fetchDaemonStatus, requestDaemonShutdown } from '../browser/daemon-transport.js';
-import { restartDaemon, waitForDaemonStop } from '../browser/daemon-lifecycle.js';
+import { fetchDaemonStatus } from '../browser/daemon-transport.js';
+import { restartDaemon, stopDaemonWithFallback } from '../browser/daemon-lifecycle.js';
 import { isDaemonStale } from '../browser/daemon-version.js';
 import { emitFailure, emitResult } from '../command-output.js';
 import { BrowserConnectError, EXIT_CODES } from '../errors.js';
@@ -20,24 +20,7 @@ export async function daemonStatus(): Promise<void> {
 export async function daemonStop(): Promise<void> {
   const status = await fetchDaemonStatus();
   if (!status) { emitResult({ running: false, stopped: false }); return; }
-  const shutdownAccepted = await requestDaemonShutdown();
-  let stopped = shutdownAccepted && await waitForDaemonStop(3000);
-  if (!stopped && typeof status.pid === 'number' && Number.isInteger(status.pid) && status.pid > 0) {
-    try {
-      process.kill(status.pid, 'SIGTERM');
-    } catch {
-      // ESRCH / EPERM are resolved by polling daemon health below.
-    }
-    stopped = await waitForDaemonStop(2000);
-    if (!stopped) {
-      try {
-        process.kill(status.pid, 'SIGKILL');
-      } catch {
-        // ESRCH / EPERM are resolved by polling daemon health below.
-      }
-      stopped = await waitForDaemonStop(2000);
-    }
-  }
+  const stopped = await stopDaemonWithFallback(status);
   if (!stopped) {
     emitFailure({ code: 'daemon_stop_failed', message: 'Daemon did not stop after shutdown and signal fallback.' });
     return;

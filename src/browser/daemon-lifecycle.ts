@@ -85,29 +85,59 @@ export async function waitForDaemonStatus(timeoutMs: number): Promise<DaemonStat
 }
 
 export const daemonLifecycleHooks = {
+  fetchDaemonStatus,
+  getDaemonHealth,
   requestDaemonShutdown,
   spawnDaemonProcess,
+  waitForDaemonStatus,
   waitForDaemonStop,
   launchConfiguredBrowser,
 };
+
+export async function stopDaemonWithFallback(
+  status: DaemonStatus,
+  opts: { stopTimeoutMs?: number } = {},
+): Promise<boolean> {
+  const shutdownAccepted = await daemonLifecycleHooks.requestDaemonShutdown();
+  let stopped = shutdownAccepted
+    ? await daemonLifecycleHooks.waitForDaemonStop(opts.stopTimeoutMs ?? 3000)
+    : (await daemonLifecycleHooks.fetchDaemonStatus()) === null;
+
+  if (!stopped && typeof status.pid === 'number' && Number.isInteger(status.pid) && status.pid > 0) {
+    try {
+      process.kill(status.pid, 'SIGTERM');
+    } catch {
+      // ESRCH / EPERM are resolved by polling daemon health below.
+    }
+    stopped = await daemonLifecycleHooks.waitForDaemonStop(2000);
+    if (!stopped) {
+      try {
+        process.kill(status.pid, 'SIGKILL');
+      } catch {
+        // ESRCH / EPERM are resolved by polling daemon health below.
+      }
+      stopped = await daemonLifecycleHooks.waitForDaemonStop(2000);
+    }
+  }
+  return stopped;
+}
 
 export async function restartDaemon(opts: { stopTimeoutMs?: number; startTimeoutMs?: number } = {}): Promise<DaemonRestartResult> {
   const sessionBlock = getWindowsSessionAutostartBlock();
   if (sessionBlock) {
     throw new BrowserConnectError(sessionBlock.message, sessionBlock.hint, 'daemon-not-running');
   }
-  const previousStatus = await fetchDaemonStatus();
+  const previousStatus = await daemonLifecycleHooks.fetchDaemonStatus();
   let stopped = previousStatus === null;
   if (previousStatus) {
-    const shutdownAccepted = await requestDaemonShutdown();
-    stopped = shutdownAccepted && await waitForDaemonStop(opts.stopTimeoutMs ?? 3000);
+    stopped = await stopDaemonWithFallback(previousStatus, { stopTimeoutMs: opts.stopTimeoutMs });
     if (!stopped) {
       return { previousStatus, status: previousStatus, stopped: false, spawned: false };
     }
   }
 
-  spawnDaemonProcess();
-  const status = await waitForDaemonStatus(opts.startTimeoutMs ?? 5000);
+  daemonLifecycleHooks.spawnDaemonProcess();
+  const status = await daemonLifecycleHooks.waitForDaemonStatus(opts.startTimeoutMs ?? 5000);
   return { previousStatus, status, stopped, spawned: true };
 }
 

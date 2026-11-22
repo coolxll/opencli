@@ -4,10 +4,14 @@ import { join } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BrowserCliCommand } from '../registry.js';
 
-const executeCommandMock = vi.hoisted(() => vi.fn());
+const { executeCommandMock, isTerminatingBySignalMock } = vi.hoisted(() => ({
+  executeCommandMock: vi.fn(),
+  isTerminatingBySignalMock: vi.fn(() => false),
+}));
 
 vi.mock('../execution.js', () => ({
   executeCommand: executeCommandMock,
+  isTerminatingBySignal: isTerminatingBySignalMock,
 }));
 
 import { collectAuthRefresh, collectAuthStatus } from './auth.js';
@@ -63,6 +67,8 @@ async function tempStatePath(): Promise<string> {
 beforeEach(() => {
   getRegistry().clear();
   executeCommandMock.mockReset();
+  isTerminatingBySignalMock.mockReset();
+  isTerminatingBySignalMock.mockReturnValue(false);
   executeCommandMock.mockImplementation(async (cmd: BrowserCliCommand, kwargs: Record<string, unknown>) => {
     if (!cmd.func) return {};
     return cmd.func({ goto: vi.fn(), wait: vi.fn() } as never, kwargs);
@@ -411,5 +417,46 @@ describe('auth classification regressions', () => {
     await collectAuthRefresh({ statePath, profile: 'personal' });
     expect((await collectAuthRefresh({ statePath, profile: 'work' }))[0]?.status).toBe('touched');
     expect((await collectAuthRefresh({ statePath, profile: 'personal' }))[0]?.status).toBe('skipped');
+  });
+});
+
+describe('auth signal termination short-circuit', () => {
+  it('stops dispatching new sites and drops interrupted error rows in collectAuthStatus', async () => {
+    registerWhoami('alpha', { quick: true, quickLoggedIn: true });
+    registerWhoami('beta', { quick: true, quickLoggedIn: true });
+    registerWhoami('gamma', { quick: true, quickLoggedIn: true });
+
+    executeCommandMock.mockImplementation(async (cmd: BrowserCliCommand) => {
+      if (cmd.site === 'alpha') {
+        isTerminatingBySignalMock.mockReturnValue(true);
+        throw new Error('CDP connection closed');
+      }
+      return { logged_in: true };
+    });
+
+    const rows = await collectAuthStatus({ concurrency: 1 });
+
+    expect(executeCommandMock).toHaveBeenCalledTimes(1);
+    expect(rows).toEqual([]);
+  });
+
+  it('stops dispatching, omits failure rows, and skips persisting state in collectAuthRefresh', async () => {
+    registerWhoami('alpha', { quick: true, quickLoggedIn: true });
+    registerWhoami('beta', { quick: true, quickLoggedIn: true });
+    const statePath = await tempStatePath();
+
+    executeCommandMock.mockImplementation(async (cmd: BrowserCliCommand) => {
+      if (cmd.site === 'alpha') {
+        isTerminatingBySignalMock.mockReturnValue(true);
+        throw new Error('CDP connection closed');
+      }
+      return { status: 'touched' };
+    });
+
+    const rows = await collectAuthRefresh({ concurrency: 1, statePath });
+
+    expect(executeCommandMock).toHaveBeenCalledTimes(1);
+    expect(rows).toEqual([]);
+    await expect(readFile(statePath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   });
 });

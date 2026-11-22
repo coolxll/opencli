@@ -1,7 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({ status: vi.fn(), stop: vi.fn(), restart: vi.fn(), waitForStop: vi.fn() }));
-vi.mock('../browser/daemon-transport.js', () => ({ fetchDaemonStatus: mocks.status, requestDaemonShutdown: mocks.stop }));
-vi.mock('../browser/daemon-lifecycle.js', () => ({ restartDaemon: mocks.restart, waitForDaemonStop: mocks.waitForStop }));
+vi.mock('../browser/daemon-transport.js', () => ({
+  fetchDaemonStatus: mocks.status,
+  requestDaemonShutdown: mocks.stop,
+  getDaemonHealth: vi.fn(),
+}));
+vi.mock('../browser/daemon-lifecycle.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../browser/daemon-lifecycle.js')>();
+  return { ...actual, restartDaemon: mocks.restart };
+});
+import { daemonLifecycleHooks } from '../browser/daemon-lifecycle.js';
 import { daemonStatus, daemonStop, daemonRestart } from './daemon.js';
 import { BrowserConnectError, EXIT_CODES } from '../errors.js';
 import { PKG_VERSION } from '../version.js';
@@ -12,7 +20,12 @@ function result() {
   expect(stdout).toHaveBeenCalledTimes(1);
   return JSON.parse(stdout.mock.calls[0][0]);
 }
-beforeEach(() => { vi.resetAllMocks(); stdout = vi.spyOn(console, 'log').mockImplementation(() => {}); process.exitCode = undefined; });
+beforeEach(() => {
+  vi.resetAllMocks();
+  vi.spyOn(daemonLifecycleHooks, 'waitForDaemonStop').mockImplementation((ms) => mocks.waitForStop(ms));
+  stdout = vi.spyOn(console, 'log').mockImplementation(() => {});
+  process.exitCode = undefined;
+});
 afterEach(() => { vi.restoreAllMocks(); process.exitCode = undefined; });
 describe('daemon structured output', () => {
   it('reports an unreachable daemon', async () => {
@@ -89,6 +102,19 @@ describe('daemon structured output', () => {
 
     expect(killSpy).toHaveBeenNthCalledWith(1, status.pid, 'SIGTERM');
     expect(killSpy).toHaveBeenNthCalledWith(2, status.pid, 'SIGKILL');
+    expect(result().data).toEqual({ running: false, stopped: true });
+  });
+  it('skips process.kill when POST /shutdown fails and health re-check shows daemon already stopped', async () => {
+    mocks.status
+      .mockResolvedValueOnce(status) // initial check
+      .mockResolvedValueOnce(null);  // re-check after failed /shutdown
+    mocks.stop.mockResolvedValue(false);
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true);
+
+    await daemonStop();
+
+    expect(killSpy).not.toHaveBeenCalled();
+    expect(mocks.waitForStop).not.toHaveBeenCalled();
     expect(result().data).toEqual({ running: false, stopped: true });
   });
   it('succeeds when POST /shutdown fails because daemon already exited (ESRCH)', async () => {

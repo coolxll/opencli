@@ -52,6 +52,9 @@ export const CDP_REQUEST_BODY_CAPTURE_LIMIT = 1 * 1024 * 1024;
 export class CDPBridge implements IBrowserFactory {
   private _ws: WebSocket | null = null;
   private _connectingWs: WebSocket | null = null;
+  private _connecting = false;
+  private _connectGen = 0;
+  private _connectAbortController: AbortController | null = null;
   private _connectTimeout: ReturnType<typeof setTimeout> | null = null;
   private _rejectConnect: ((err: Error) => void) | null = null;
   private _idCounter = 0;
@@ -60,7 +63,7 @@ export class CDPBridge implements IBrowserFactory {
   private _eventWaiters = new Set<{ event: string; handler: (params: unknown) => void; timer: ReturnType<typeof setTimeout>; reject: (err: Error) => void }>();
 
   async connect(opts?: { timeout?: number; session?: string; cdpEndpoint?: string; contextId?: string; idleTimeout?: number; windowMode?: 'foreground' | 'background'; surface?: 'browser' | 'adapter'; siteSession?: 'ephemeral' | 'persistent' }): Promise<IPage> {
-    if (this._ws || this._connectingWs) throw new Error('CDPBridge is already connected. Call close() before reconnecting.');
+    if (this._ws || this._connectingWs || this._connecting) throw new Error('CDPBridge is already connected. Call close() before reconnecting.');
 
     const endpoint = opts?.cdpEndpoint ?? process.env.OPENCLI_CDP_ENDPOINT;
     if (!endpoint) throw new Error('CDP endpoint not provided (pass cdpEndpoint or set OPENCLI_CDP_ENDPOINT)');
@@ -72,18 +75,53 @@ export class CDPBridge implements IBrowserFactory {
     }
     const initSource = initPath ? readFileSync(initPath, 'utf8') : undefined;
 
+    const connectGen = ++this._connectGen;
+    this._connecting = true;
+    const abortController = new AbortController();
+    this._connectAbortController = abortController;
+
     let wsUrl = endpoint;
     if (endpoint.startsWith('http')) {
-      const targets = await fetchJsonDirect(`${endpoint.replace(/\/$/, '')}/json`) as CDPTarget[];
-      const target = selectCDPTarget(targets);
-      if (!target || !target.webSocketDebuggerUrl) {
-        throw new Error('No inspectable targets found at CDP endpoint');
+      try {
+        const targets = await fetchJsonDirect(`${endpoint.replace(/\/$/, '')}/json`, abortController.signal) as CDPTarget[];
+        if (this._connectGen !== connectGen || abortController.signal.aborted) {
+          throw new Error('CDP connection closed');
+        }
+        const target = selectCDPTarget(targets);
+        if (!target || !target.webSocketDebuggerUrl) {
+          throw new Error('No inspectable targets found at CDP endpoint');
+        }
+        wsUrl = target.webSocketDebuggerUrl;
+      } catch (err) {
+        if (this._connectAbortController === abortController) {
+          this._connectAbortController = null;
+        }
+        if (this._connectGen === connectGen) {
+          this._connecting = false;
+        }
+        if (abortController.signal.aborted || this._connectGen !== connectGen) {
+          throw new Error('CDP connection closed');
+        }
+        throw err;
       }
-      wsUrl = target.webSocketDebuggerUrl;
+    }
+
+    if (this._connectAbortController === abortController) {
+      this._connectAbortController = null;
+    }
+    if (this._connectGen !== connectGen || abortController.signal.aborted) {
+      throw new Error('CDP connection closed');
+    }
+
+    let ws: WebSocket;
+    try {
+      ws = new WebSocket(wsUrl);
+    } catch (err) {
+      if (this._connectGen === connectGen) this._connecting = false;
+      throw err;
     }
 
     return new Promise((resolve, reject) => {
-      const ws = new WebSocket(wsUrl);
       let settled = false;
       const timeoutMs = (opts?.timeout ?? 10) * 1000;
 
@@ -94,6 +132,7 @@ export class CDPBridge implements IBrowserFactory {
         }
         if (this._connectingWs === ws) this._connectingWs = null;
         if (this._rejectConnect === rejectConnect) this._rejectConnect = null;
+        if (this._connectGen === connectGen) this._connecting = false;
       };
 
       const rejectConnect = (err: Error) => {
@@ -207,6 +246,13 @@ export class CDPBridge implements IBrowserFactory {
   }
 
   async close(): Promise<void> {
+    this._connectGen++;
+    this._connecting = false;
+    if (this._connectAbortController) {
+      const controller = this._connectAbortController;
+      this._connectAbortController = null;
+      controller.abort();
+    }
     if (this._connectTimeout) {
       clearTimeout(this._connectTimeout);
       this._connectTimeout = null;
@@ -689,14 +735,30 @@ export const __test__ = {
   scoreCDPTarget,
 };
 
-function fetchJsonDirect(url: string): Promise<unknown> {
+function fetchJsonDirect(url: string, signal?: AbortSignal): Promise<unknown> {
   return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new Error('CDP connection closed'));
+      return;
+    }
     const parsed = new URL(url);
+    let settled = false;
+    const finish = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      signal?.removeEventListener('abort', onAbort);
+      fn();
+    };
+    const onAbort = () => {
+      request.destroy();
+      finish(() => reject(new Error('CDP connection closed')));
+    };
+
     const request = (parsed.protocol === 'https:' ? httpsRequest : httpRequest)(parsed, (res) => {
       const statusCode = res.statusCode ?? 0;
       if (statusCode < 200 || statusCode >= 300) {
         res.resume();
-        reject(new Error(`Failed to fetch CDP targets: HTTP ${statusCode}`));
+        finish(() => reject(new Error(`Failed to fetch CDP targets: HTTP ${statusCode}`)));
         return;
       }
 
@@ -704,14 +766,17 @@ function fetchJsonDirect(url: string): Promise<unknown> {
       res.on('data', (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
       res.on('end', () => {
         try {
-          resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')));
+          const parsedBody = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+          finish(() => resolve(parsedBody));
         } catch (error) {
-          reject(error instanceof Error ? error : new Error(String(error)));
+          finish(() => reject(error instanceof Error ? error : new Error(String(error))));
         }
       });
+      res.on('error', (error) => finish(() => reject(error)));
     });
 
-    request.on('error', reject);
+    signal?.addEventListener('abort', onAbort, { once: true });
+    request.on('error', (error) => finish(() => reject(error)));
     request.setTimeout(10_000, () => request.destroy(new Error('Timed out fetching CDP targets')));
     request.end();
   });

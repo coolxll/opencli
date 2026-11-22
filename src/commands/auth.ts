@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { Command, InvalidArgumentError, Option } from 'commander';
 import { AuthRequiredError, CommandExecutionError, CliError, getErrorMessage } from '../errors.js';
-import { executeCommand } from '../execution.js';
+import { executeCommand, isTerminatingBySignal } from '../execution.js';
 import {
   type BrowserCliCommand,
   type CliCommand,
@@ -297,9 +297,11 @@ function refreshRowForError(
   };
 }
 
-async function runQuick(cmd: CliCommand, opts: { timeoutSeconds: number; profile?: string }): Promise<AuthStatusRow> {
+async function runQuick(cmd: CliCommand, opts: { timeoutSeconds: number; profile?: string }): Promise<AuthStatusRow | undefined> {
+  if (isTerminatingBySignal()) return undefined;
   try {
     const loaded = await loadLazyCommand(cmd);
+    if (isTerminatingBySignal()) return undefined;
     const quickCmd = quickCheckCommand(loaded, opts.timeoutSeconds);
     if (!quickCmd) {
       return {
@@ -318,6 +320,7 @@ async function runQuick(cmd: CliCommand, opts: { timeoutSeconds: number; profile
       windowMode: 'background',
       ...(opts.profile ? { profile: opts.profile } : {}),
     });
+    if (isTerminatingBySignal()) return undefined;
     const loggedIn = normalizeQuickResult(result);
     if (loggedIn === true) {
       return { site: cmd.site, status: 'logged_in', logged_in: true, identity: '', checked: 'quick', error: '' };
@@ -342,13 +345,16 @@ async function runQuick(cmd: CliCommand, opts: { timeoutSeconds: number; profile
       error: 'quickCheck returned no boolean logged_in signal',
     };
   } catch (error) {
+    if (isTerminatingBySignal()) return undefined;
     return rowForError(cmd.site, 'quick', error, opts.profile);
   }
 }
 
-async function runFull(cmd: CliCommand, opts: { timeoutSeconds: number; profile?: string }): Promise<AuthStatusRow> {
+async function runFull(cmd: CliCommand, opts: { timeoutSeconds: number; profile?: string }): Promise<AuthStatusRow | undefined> {
+  if (isTerminatingBySignal()) return undefined;
   try {
     const loaded = await loadLazyCommand(cmd);
+    if (isTerminatingBySignal()) return undefined;
     const fullCmd = withTimeoutArg(loaded, opts.timeoutSeconds);
     const result = await executeCommand(fullCmd, { timeout: opts.timeoutSeconds } as CommandArgs, false, {
       siteSession: 'ephemeral',
@@ -356,6 +362,7 @@ async function runFull(cmd: CliCommand, opts: { timeoutSeconds: number; profile?
       windowMode: 'background',
       ...(opts.profile ? { profile: opts.profile } : {}),
     });
+    if (isTerminatingBySignal()) return undefined;
     const signal = normalizeQuickResult(result);
     if (signal === false) throw new AuthRequiredError(cmd.domain ?? cmd.site);
     const rows = Array.isArray(result) ? result : [result];
@@ -373,6 +380,7 @@ async function runFull(cmd: CliCommand, opts: { timeoutSeconds: number; profile?
       error: '',
     };
   } catch (error) {
+    if (isTerminatingBySignal()) return undefined;
     return rowForError(cmd.site, 'full', error, opts.profile);
   }
 }
@@ -383,7 +391,8 @@ async function runRefresh(cmd: CliCommand, opts: {
   now: Date;
   state: AuthRefreshState;
   force: boolean;
-}): Promise<AuthRefreshRow> {
+}): Promise<AuthRefreshRow | undefined> {
+  if (isTerminatingBySignal()) return undefined;
   // Keep legacy unprofiled state separate from every explicit browser profile.
   const stateKey = opts.profile ? JSON.stringify([opts.profile, cmd.site]) : cmd.site;
   const existing = opts.state.sites[stateKey];
@@ -400,6 +409,7 @@ async function runRefresh(cmd: CliCommand, opts: {
   const attemptAt = opts.now.toISOString();
   try {
     const loaded = await loadLazyCommand(cmd);
+    if (isTerminatingBySignal()) return undefined;
     const refreshCmd = refreshCommand(loaded, opts.timeoutSeconds);
     if (!refreshCmd) {
       opts.state.sites[stateKey] = { ...existing, last_attempt_at: attemptAt, last_status: 'unsupported' };
@@ -418,6 +428,7 @@ async function runRefresh(cmd: CliCommand, opts: {
       windowMode: 'background',
       ...(opts.profile ? { profile: opts.profile } : {}),
     });
+    if (isTerminatingBySignal()) return undefined;
     const status = normalizeRefreshStatus(result);
     opts.state.sites[stateKey] = {
       ...existing,
@@ -433,6 +444,7 @@ async function runRefresh(cmd: CliCommand, opts: {
       error: '',
     };
   } catch (error) {
+    if (isTerminatingBySignal()) return undefined;
     const status: AuthRefreshStatus = error instanceof AuthRequiredError ? 'not_logged_in' : 'error';
     opts.state.sites[stateKey] = { ...existing, last_attempt_at: attemptAt, last_status: status };
     return refreshRowForError(cmd.site, existing, error, opts.profile);
@@ -442,18 +454,18 @@ async function runRefresh(cmd: CliCommand, opts: {
 async function mapConcurrent<T, R>(
   items: T[],
   concurrency: number,
-  worker: (item: T) => Promise<R>,
+  worker: (item: T) => Promise<R | undefined>,
 ): Promise<R[]> {
-  const results = new Array<R>(items.length);
+  const results = new Array<R | undefined>(items.length);
   let next = 0;
   const runners = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
-    while (next < items.length) {
+    while (next < items.length && !isTerminatingBySignal()) {
       const index = next++;
       results[index] = await worker(items[index]);
     }
   });
   await Promise.all(runners);
-  return results;
+  return results.filter((row): row is R => row !== undefined);
 }
 
 export async function collectAuthStatus(options: AuthStatusOptions): Promise<AuthStatusRow[]> {
@@ -495,7 +507,9 @@ export async function collectAuthRefresh(options: AuthRefreshOptions): Promise<A
     state,
     force: options.all === true,
   }));
-  await saveAuthRefreshState(statePath, state);
+  if (!isTerminatingBySignal()) {
+    await saveAuthRefreshState(statePath, state);
+  }
   return rows;
 }
 
@@ -523,6 +537,7 @@ export function registerAuthCommands(program: Command): Command {
         only: opts.only,
         profile: typeof globals.profile === 'string' && globals.profile.trim() ? globals.profile.trim() : undefined,
       });
+      if (isTerminatingBySignal()) return;
       const fmt = typeof opts.format === 'string' ? opts.format : 'json';
       renderOutput(rows, {
         fmt,
@@ -550,6 +565,7 @@ export function registerAuthCommands(program: Command): Command {
         timeout: opts.timeout,
         profile: typeof globals.profile === 'string' && globals.profile.trim() ? globals.profile.trim() : undefined,
       });
+      if (isTerminatingBySignal()) return;
       const fmt = typeof opts.format === 'string' ? opts.format : 'json';
       renderOutput(rows, {
         fmt,

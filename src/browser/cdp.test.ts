@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
+import { createServer, type ServerResponse } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -503,5 +504,75 @@ describe('CDPBridge lifecycle cleanup', () => {
     // Late open event must not revive or leak the bridge
     connectingSocket.emit('open');
     await expect(bridge.send('Page.enable')).rejects.toThrow('CDP connection is not open');
+  });
+
+  it('rejects concurrent connect() while HTTP /json discovery is in flight', async () => {
+    let releaseResponse!: () => void;
+    let requestReceived!: () => void;
+    const requestArrived = new Promise<void>(resolve => { requestReceived = resolve; });
+    const server = createServer((_req, res: ServerResponse) => {
+      requestReceived();
+      releaseResponse = () => {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify([{ type: 'page', url: 'https://example.com', webSocketDebuggerUrl: 'ws://127.0.0.1:9222/devtools/page/1' }]));
+      };
+    });
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    const port = (server.address() as { port: number }).port;
+
+    try {
+      const bridge = new CDPBridge();
+      vi.spyOn(bridge, 'send').mockResolvedValue({});
+
+      const firstConnect = bridge.connect({ cdpEndpoint: `http://127.0.0.1:${port}` });
+      await requestArrived;
+
+      await expect(bridge.connect({ cdpEndpoint: `http://127.0.0.1:${port}` }))
+        .rejects.toThrow('CDPBridge is already connected. Call close() before reconnecting.');
+
+      releaseResponse();
+      await expect(firstConnect).resolves.toBeDefined();
+      await bridge.close();
+    } finally {
+      await new Promise<void>(resolve => server.close(() => resolve()));
+    }
+  });
+
+  it('cancels in-flight HTTP /json discovery on close() and allows subsequent connect()', async () => {
+    let requestCount = 0;
+    let firstRequestReceived!: () => void;
+    const firstArrived = new Promise<void>(resolve => { firstRequestReceived = resolve; });
+    const server = createServer((_req, res: ServerResponse) => {
+      requestCount += 1;
+      if (requestCount === 1) {
+        firstRequestReceived();
+        // Hold open until client aborts
+        return;
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify([{ type: 'page', url: 'https://example.com', webSocketDebuggerUrl: 'ws://127.0.0.1:9222/devtools/page/2' }]));
+    });
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    const port = (server.address() as { port: number }).port;
+
+    try {
+      const bridge = new CDPBridge();
+      vi.spyOn(bridge, 'send').mockResolvedValue({});
+      const previousSocket = MockWebSocket.lastInstance;
+
+      const abortedConnect = bridge.connect({ cdpEndpoint: `http://127.0.0.1:${port}` });
+      await firstArrived;
+
+      await bridge.close();
+      await expect(abortedConnect).rejects.toThrow('CDP connection closed');
+      expect(MockWebSocket.lastInstance).toBe(previousSocket);
+
+      // Bridge is clean and can reconnect immediately
+      await expect(bridge.connect({ cdpEndpoint: `http://127.0.0.1:${port}` })).resolves.toBeDefined();
+      await bridge.close();
+    } finally {
+      server.closeAllConnections?.();
+      await new Promise<void>(resolve => server.close(() => resolve()));
+    }
   });
 });
