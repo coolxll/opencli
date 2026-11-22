@@ -8,12 +8,16 @@ const { MockWebSocket } = vi.hoisted(() => {
   class MockWebSocket {
     static OPEN = 1;
     static lastInstance: MockWebSocket | undefined;
+    static autoOpen = true;
     readyState = 1;
+    closed = false;
     private handlers = new Map<string, Array<(...args: unknown[]) => void>>();
 
     constructor(_url: string) {
       MockWebSocket.lastInstance = this;
-      queueMicrotask(() => this.emit('open'));
+      if (MockWebSocket.autoOpen) {
+        queueMicrotask(() => this.emit('open'));
+      }
     }
 
     on(event: string, handler: (...args: unknown[]) => void): void {
@@ -25,6 +29,7 @@ const { MockWebSocket } = vi.hoisted(() => {
     send(_message: string): void {}
 
     close(): void {
+      this.closed = true;
       this.readyState = 3;
     }
 
@@ -401,6 +406,7 @@ describe('CDPPage.evaluateOnce', () => {
 
 describe('CDPBridge lifecycle cleanup', () => {
   afterEach(() => {
+    MockWebSocket.autoOpen = true;
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
   });
@@ -448,5 +454,54 @@ describe('CDPBridge lifecycle cleanup', () => {
     await bridge.close();
 
     await expect(waiter).rejects.toThrow('CDP connection closed');
+  });
+
+  it('ignores delayed close and message events from a stale socket after reconnect', async () => {
+    vi.stubEnv('OPENCLI_CDP_ENDPOINT', 'ws://127.0.0.1:9222/devtools/page/1');
+    const bridge = new CDPBridge();
+    const sendOrig = bridge.send.bind(bridge);
+    const sendSpy = vi.spyOn(bridge, 'send').mockResolvedValue({});
+
+    await bridge.connect();
+    const staleSocket = MockWebSocket.lastInstance!;
+    await bridge.close();
+
+    await bridge.connect();
+    const currentSocket = MockWebSocket.lastInstance!;
+    expect(currentSocket).not.toBe(staleSocket);
+    sendSpy.mockRestore();
+
+    const pendingCmd = sendOrig('Runtime.evaluate', { expression: '1+1' }, 30_000);
+    const eventWaiter = bridge.waitForEvent('Page.loadEventFired', 30_000);
+
+    // Delayed close from stale socket must NOT abort current socket's pending command or waiter
+    staleSocket.emit('close');
+    staleSocket.emit('message', Buffer.from(JSON.stringify({ method: 'Page.loadEventFired', params: { stale: true } })));
+
+    // Current socket responds normally
+    currentSocket.emit('message', Buffer.from(JSON.stringify({ id: 1, result: { ok: true } })));
+    currentSocket.emit('message', Buffer.from(JSON.stringify({ method: 'Page.loadEventFired', params: { fresh: true } })));
+
+    await expect(pendingCmd).resolves.toEqual({ ok: true });
+    await expect(eventWaiter).resolves.toEqual({ fresh: true });
+    await bridge.close();
+  });
+
+  it('aborts an in-flight connect() cleanly when close() is called before open', async () => {
+    vi.stubEnv('OPENCLI_CDP_ENDPOINT', 'ws://127.0.0.1:9222/devtools/page/1');
+    MockWebSocket.autoOpen = false;
+    const bridge = new CDPBridge();
+
+    const connectPromise = bridge.connect();
+    const connectingSocket = MockWebSocket.lastInstance!;
+    expect(connectingSocket).toBeDefined();
+
+    await bridge.close();
+
+    expect(connectingSocket.closed).toBe(true);
+    await expect(connectPromise).rejects.toThrow('CDP connection closed');
+    // Late open event must not revive or leak the bridge
+    connectingSocket.emit('open');
+    await expect(bridge.send('Page.enable')).rejects.toThrow('CDP connection is not open');
   });
 });

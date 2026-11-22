@@ -12,7 +12,7 @@
 
 import { Command } from 'commander';
 import { emitFailure } from './command-output.js';
-import { executeCommand, prepareCommandArgs } from './execution.js';
+import { executeCommand, isTerminatingBySignal, prepareCommandArgs } from './execution.js';
 import {
   commandHelpData,
   formatCommandHelpText,
@@ -137,6 +137,7 @@ export function registerCommandToProgram(siteCmd: Command, cmd: CliCommand): voi
         footerExtra: resolved.footerExtra?.(kwargs),
       });
     } catch (err) {
+      if (isTerminatingBySignal()) return;
       renderError(err, optionsRecord.verbose === true);
     }
   });

@@ -3,7 +3,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import type { CliCommand } from './registry.js';
-import { coerceAndValidateArgs, executeCommand, prepareCommandArgs } from './execution.js';
+import { coerceAndValidateArgs, executeCommand, isTerminatingBySignal, prepareCommandArgs } from './execution.js';
 import { ArgumentError, TimeoutError, toEnvelope } from './errors.js';
 import { cli, Strategy } from './registry.js';
 import { withTimeoutMs } from './runtime.js';
@@ -1301,6 +1301,83 @@ describe('executeCommand — SIGINT/SIGTERM cleanup', () => {
     finishCmd();
     await runPromise;
 
+    expect(process.listenerCount('SIGTERM')).toBe(beforeSigTerm);
+  });
+
+  it('coordinates concurrent runs with a single process listener and waits for all cleanups before exit', async () => {
+    const events: string[] = [];
+    let releaseCleanup1!: () => void;
+    const closeWindow1 = vi.fn<() => Promise<void>>()
+      .mockImplementationOnce(() => new Promise<void>((resolve) => {
+        releaseCleanup1 = () => {
+          events.push('cleanup1');
+          resolve();
+        };
+      }))
+      .mockResolvedValue(undefined);
+    const closeWindow2 = vi.fn(async () => {
+      events.push(`cleanup2:terminating=${isTerminatingBySignal()}`);
+    });
+    const bridgeClose1 = vi.fn().mockResolvedValue(undefined);
+    const bridgeClose2 = vi.fn().mockResolvedValue(undefined);
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => {
+      events.push('exit');
+      return undefined as never;
+    }) as never);
+
+    vi.spyOn(capRouting, 'shouldUseBrowserSession').mockReturnValue(true);
+    let callIdx = 0;
+    vi.spyOn(runtime, 'browserSession').mockImplementation(async (_Factory, fn, opts) => {
+      const idx = ++callIdx;
+      const page = idx === 1 ? { closeWindow: closeWindow1 } : { closeWindow: closeWindow2 };
+      const bridge = idx === 1 ? { connect: vi.fn(), close: bridgeClose1 } : { connect: vi.fn(), close: bridgeClose2 };
+      opts?.onBridge?.(bridge);
+      return fn(page as any);
+    });
+
+    const beforeSigInt = process.listenerCount('SIGINT');
+    const beforeSigTerm = process.listenerCount('SIGTERM');
+
+    let finish1!: () => void;
+    let finish2!: () => void;
+    const cmd1 = cli({
+      site: 'test-signal', name: 'concurrent-1', access: 'read', description: 'c1', browser: true, strategy: Strategy.PUBLIC,
+      func: () => new Promise<unknown>((resolve) => { finish1 = () => resolve([]); }),
+    });
+    const cmd2 = cli({
+      site: 'test-signal', name: 'concurrent-2', access: 'read', description: 'c2', browser: true, strategy: Strategy.PUBLIC,
+      func: () => new Promise<unknown>((resolve) => { finish2 = () => resolve([]); }),
+    });
+
+    const p1 = executeCommand(cmd1, {});
+    const p2 = executeCommand(cmd2, {});
+    await new Promise((r) => setTimeout(r, 10));
+
+    // Only one process-wide listener is registered regardless of concurrency
+    expect(process.listenerCount('SIGINT')).toBe(beforeSigInt + 1);
+    expect(process.listenerCount('SIGTERM')).toBe(beforeSigTerm + 1);
+
+    process.emit('SIGINT', 'SIGINT');
+    await new Promise((r) => setTimeout(r, 10));
+    expect(isTerminatingBySignal()).toBe(true);
+    // Must not exit before cleanup1 finishes
+    expect(exitSpy).not.toHaveBeenCalled();
+
+    releaseCleanup1();
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(closeWindow1).toHaveBeenCalledTimes(1);
+    expect(closeWindow2).toHaveBeenCalledTimes(1);
+    expect(bridgeClose1).toHaveBeenCalledTimes(1);
+    expect(bridgeClose2).toHaveBeenCalledTimes(1);
+    expect(exitSpy).toHaveBeenCalledWith(130);
+    expect(events).toEqual(['cleanup2:terminating=true', 'cleanup1', 'exit']);
+
+    finish1();
+    finish2();
+    await Promise.all([p1, p2]);
+
+    expect(process.listenerCount('SIGINT')).toBe(beforeSigInt);
     expect(process.listenerCount('SIGTERM')).toBe(beforeSigTerm);
   });
 });

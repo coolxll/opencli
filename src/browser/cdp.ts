@@ -51,13 +51,16 @@ export const CDP_REQUEST_BODY_CAPTURE_LIMIT = 1 * 1024 * 1024;
 
 export class CDPBridge implements IBrowserFactory {
   private _ws: WebSocket | null = null;
+  private _connectingWs: WebSocket | null = null;
+  private _connectTimeout: ReturnType<typeof setTimeout> | null = null;
+  private _rejectConnect: ((err: Error) => void) | null = null;
   private _idCounter = 0;
   private _pending = new Map<number, { resolve: (val: unknown) => void; reject: (err: Error) => void; timer: ReturnType<typeof setTimeout> }>();
   private _eventListeners = new Map<string, Set<(params: unknown) => void>>();
   private _eventWaiters = new Set<{ event: string; handler: (params: unknown) => void; timer: ReturnType<typeof setTimeout>; reject: (err: Error) => void }>();
 
   async connect(opts?: { timeout?: number; session?: string; cdpEndpoint?: string; contextId?: string; idleTimeout?: number; windowMode?: 'foreground' | 'background'; surface?: 'browser' | 'adapter'; siteSession?: 'ephemeral' | 'persistent' }): Promise<IPage> {
-    if (this._ws) throw new Error('CDPBridge is already connected. Call close() before reconnecting.');
+    if (this._ws || this._connectingWs) throw new Error('CDPBridge is already connected. Call close() before reconnecting.');
 
     const endpoint = opts?.cdpEndpoint ?? process.env.OPENCLI_CDP_ENDPOINT;
     if (!endpoint) throw new Error('CDP endpoint not provided (pass cdpEndpoint or set OPENCLI_CDP_ENDPOINT)');
@@ -83,16 +86,41 @@ export class CDPBridge implements IBrowserFactory {
       const ws = new WebSocket(wsUrl);
       let settled = false;
       const timeoutMs = (opts?.timeout ?? 10) * 1000;
-      const timeout = setTimeout(() => {
+
+      const clearConnectState = () => {
+        if (this._connectTimeout) {
+          clearTimeout(this._connectTimeout);
+          this._connectTimeout = null;
+        }
+        if (this._connectingWs === ws) this._connectingWs = null;
+        if (this._rejectConnect === rejectConnect) this._rejectConnect = null;
+      };
+
+      const rejectConnect = (err: Error) => {
         if (settled) return;
         settled = true;
-        this._ws = null;
+        clearConnectState();
+        reject(err);
+      };
+
+      this._connectingWs = ws;
+      this._rejectConnect = rejectConnect;
+      this._connectTimeout = setTimeout(() => {
+        if (this._ws === ws) this._ws = null;
         ws.close();
-        reject(new Error('CDP connect timeout'));
+        rejectConnect(new Error('CDP connect timeout'));
       }, timeoutMs);
 
       ws.on('open', async () => {
-        clearTimeout(timeout);
+        if (settled || this._connectingWs !== ws) {
+          try { ws.close(); } catch {}
+          return;
+        }
+        if (this._connectTimeout) {
+          clearTimeout(this._connectTimeout);
+          this._connectTimeout = null;
+        }
+        this._connectingWs = null;
         this._ws = ws;
         try {
           await this.send('Page.enable');
@@ -100,41 +128,37 @@ export class CDPBridge implements IBrowserFactory {
           // Optional caller script for every new document, e.g. state a headless peer cannot share across connections.
           if (initSource !== undefined) await this.send('Page.addScriptToEvaluateOnNewDocument', { source: initSource });
         } catch (err) {
-          await this.close();
-          if (!settled) {
-            settled = true;
-            reject(err instanceof Error ? err : new Error(String(err)));
-          }
+          const connectErr = err instanceof Error ? err : new Error(String(err));
+          if (this._rejectConnect === rejectConnect) this._rejectConnect = null;
+          if (this._ws === ws) await this.close();
+          rejectConnect(connectErr);
           return;
         }
-        if (!settled) {
-          settled = true;
-          resolve(new CDPPage(this));
-        }
+        if (settled || this._ws !== ws) return;
+        settled = true;
+        clearConnectState();
+        resolve(new CDPPage(this));
       });
 
       ws.on('error', (err: Error) => {
-        clearTimeout(timeout);
-        if (!settled) {
-          settled = true;
-          reject(err);
-        }
+        if (ws !== this._ws && ws !== this._connectingWs) return;
+        rejectConnect(err);
       });
 
       ws.on('close', () => {
-        clearTimeout(timeout);
-        if (this._ws === ws) {
-          this._ws = null;
+        if (ws === this._connectingWs) {
+          rejectConnect(new Error('CDP connection closed'));
+          return;
         }
+        if (ws !== this._ws) return;
+        this._ws = null;
         this._rejectPending('CDP connection closed');
         this._rejectEventWaiters('CDP connection closed');
-        if (!settled) {
-          settled = true;
-          reject(new Error('CDP connection closed'));
-        }
+        rejectConnect(new Error('CDP connection closed'));
       });
 
       ws.on('message', (data: RawData) => {
+        if (ws !== this._ws) return;
         try {
           const msg = JSON.parse(data.toString());
           if (msg.id && this._pending.has(msg.id)) {
@@ -183,6 +207,20 @@ export class CDPBridge implements IBrowserFactory {
   }
 
   async close(): Promise<void> {
+    if (this._connectTimeout) {
+      clearTimeout(this._connectTimeout);
+      this._connectTimeout = null;
+    }
+    if (this._connectingWs) {
+      const connecting = this._connectingWs;
+      this._connectingWs = null;
+      try { connecting.close(); } catch {}
+    }
+    if (this._rejectConnect) {
+      const rejectConnect = this._rejectConnect;
+      this._rejectConnect = null;
+      rejectConnect(new Error('CDP connection closed'));
+    }
     if (this._ws) {
       const ws = this._ws;
       this._ws = null;

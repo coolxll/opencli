@@ -77,9 +77,40 @@ describe('daemon structured output', () => {
     expect(result().error.code).toBe('daemon_stop_failed');
     expect(process.exitCode).toBe(1);
   });
-  it('reports a shutdown failure', async () => {
-    mocks.status.mockResolvedValue(status); mocks.stop.mockResolvedValue(false); await daemonStop();
-    expect(result().error.code).toBe('daemon_stop_failed'); expect(process.exitCode).toBe(1);
+  it('falls through to SIGTERM/SIGKILL when POST /shutdown fails or times out', async () => {
+    mocks.status.mockResolvedValue(status);
+    mocks.stop.mockResolvedValue(false);
+    mocks.waitForStop
+      .mockResolvedValueOnce(false) // after SIGTERM
+      .mockResolvedValueOnce(true); // after SIGKILL
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true);
+
+    await daemonStop();
+
+    expect(killSpy).toHaveBeenNthCalledWith(1, status.pid, 'SIGTERM');
+    expect(killSpy).toHaveBeenNthCalledWith(2, status.pid, 'SIGKILL');
+    expect(result().data).toEqual({ running: false, stopped: true });
+  });
+  it('succeeds when POST /shutdown fails because daemon already exited (ESRCH)', async () => {
+    mocks.status.mockResolvedValue(status);
+    mocks.stop.mockResolvedValue(false);
+    mocks.waitForStop.mockResolvedValueOnce(true);
+    const esrch = Object.assign(new Error('ESRCH'), { code: 'ESRCH' });
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => { throw esrch; });
+
+    await daemonStop();
+
+    expect(killSpy).toHaveBeenCalledWith(status.pid, 'SIGTERM');
+    expect(result().data).toEqual({ running: false, stopped: true });
+  });
+  it('reports a shutdown failure when /shutdown and signal fallbacks all fail', async () => {
+    mocks.status.mockResolvedValue(status);
+    mocks.stop.mockResolvedValue(false);
+    mocks.waitForStop.mockResolvedValue(false);
+    vi.spyOn(process, 'kill').mockImplementation(() => true);
+    await daemonStop();
+    expect(result().error.code).toBe('daemon_stop_failed');
+    expect(process.exitCode).toBe(1);
   });
   it.each([true, false])('reports restart action when previous daemon exists: %s', async previous => {
     mocks.restart.mockResolvedValue({ stopped: true, status, previousStatus: previous ? status : null }); await daemonRestart();

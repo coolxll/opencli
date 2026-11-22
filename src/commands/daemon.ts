@@ -20,11 +20,8 @@ export async function daemonStatus(): Promise<void> {
 export async function daemonStop(): Promise<void> {
   const status = await fetchDaemonStatus();
   if (!status) { emitResult({ running: false, stopped: false }); return; }
-  if (!await requestDaemonShutdown()) {
-    emitFailure({ code: 'daemon_stop_failed', message: 'Failed to stop daemon.' });
-    return;
-  }
-  let stopped = await waitForDaemonStop(3000);
+  const shutdownAccepted = await requestDaemonShutdown();
+  let stopped = shutdownAccepted && await waitForDaemonStop(3000);
   if (!stopped && typeof status.pid === 'number' && Number.isInteger(status.pid) && status.pid > 0) {
     try {
       process.kill(status.pid, 'SIGTERM');

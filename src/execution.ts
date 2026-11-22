@@ -42,6 +42,51 @@ const _loadedModules = new Map<string, Promise<void>>();
 const _moduleMtimes = new Map<string, number>();
 const _userClisDir = `${os.homedir()}/.opencli/clis/`;
 
+const _signalCleanupHandlers = new Set<() => Promise<void>>();
+let _signalInProgress = false;
+let _terminatingBySignal = false;
+
+export function isTerminatingBySignal(): boolean {
+  return _terminatingBySignal;
+}
+
+function handleProcessTerminationSignal(signal: 'SIGINT' | 'SIGTERM'): void {
+  if (_signalInProgress) return;
+  _signalInProgress = true;
+  _terminatingBySignal = true;
+  const exitCode = signal === 'SIGINT' ? 130 : 143;
+  const handlers = [..._signalCleanupHandlers];
+  const cleanup = Promise.allSettled(handlers.map((fn) => fn().catch(() => {})));
+  const timeout = new Promise<void>((resolve) => {
+    const t = setTimeout(resolve, SIGNAL_CLEANUP_TIMEOUT_MS);
+    t.unref?.();
+  });
+  void Promise.race([cleanup, timeout]).finally(() => {
+    process.exit(exitCode);
+    // Only reached in tests where process.exit is mocked.
+    _signalInProgress = false;
+    _terminatingBySignal = false;
+  });
+}
+
+const _onProcessSigInt = () => handleProcessTerminationSignal('SIGINT');
+const _onProcessSigTerm = () => handleProcessTerminationSignal('SIGTERM');
+
+function registerSignalCleanup(cleanup: () => Promise<void>): () => void {
+  if (_signalCleanupHandlers.size === 0) {
+    process.on('SIGINT', _onProcessSigInt);
+    process.on('SIGTERM', _onProcessSigTerm);
+  }
+  _signalCleanupHandlers.add(cleanup);
+  return () => {
+    _signalCleanupHandlers.delete(cleanup);
+    if (_signalCleanupHandlers.size === 0) {
+      process.off('SIGINT', _onProcessSigInt);
+      process.off('SIGTERM', _onProcessSigTerm);
+    }
+  };
+}
+
 type TraceMode = 'off' | 'on' | 'retain-on-failure';
 
 function normalizeTraceMode(raw: unknown): TraceMode {
@@ -301,39 +346,22 @@ export async function executeCommand(
       let adapterRun = null as Promise<unknown> | null;
       let activeBridge = null as IBrowserFactory | null;
       let activePage = null as IPage | null;
-      let signalHandled = false;
-      const handleTerminationSignal = (signal: 'SIGINT' | 'SIGTERM') => {
-        if (signalHandled) return;
-        signalHandled = true;
-        const exitCode = signal === 'SIGINT' ? 130 : 143;
-        const cleanup = (async () => {
-          const tasks: Promise<unknown>[] = [];
-          if (!keepTab && activePage?.closeWindow) {
-            tasks.push(activePage.closeWindow().catch(() => {}));
-          }
-          if (leaseRun) {
-            setDaemonRunContext(null);
-            tasks.push(
-              releaseSiteSessionLease({ runId: leaseRun.runId, session: leaseRun.session, surface: 'adapter' }).catch(() => {}),
-            );
-          }
-          if (activeBridge) {
-            tasks.push(activeBridge.close().catch(() => {}));
-          }
-          await Promise.allSettled(tasks);
-        })();
-        const timeout = new Promise<void>((resolve) => {
-          const t = setTimeout(resolve, SIGNAL_CLEANUP_TIMEOUT_MS);
-          t.unref?.();
-        });
-        void Promise.race([cleanup, timeout]).finally(() => {
-          process.exit(exitCode);
-        });
-      };
-      const onSigInt = () => handleTerminationSignal('SIGINT');
-      const onSigTerm = () => handleTerminationSignal('SIGTERM');
-      process.on('SIGINT', onSigInt);
-      process.on('SIGTERM', onSigTerm);
+      const unregisterSignalCleanup = registerSignalCleanup(async () => {
+        const tasks: Promise<unknown>[] = [];
+        if (!keepTab && activePage?.closeWindow) {
+          tasks.push(activePage.closeWindow().catch(() => {}));
+        }
+        if (leaseRun) {
+          setDaemonRunContext(null);
+          tasks.push(
+            releaseSiteSessionLease({ runId: leaseRun.runId, session: leaseRun.session, surface: 'adapter' }).catch(() => {}),
+          );
+        }
+        if (activeBridge) {
+          tasks.push(activeBridge.close().catch(() => {}));
+        }
+        await Promise.allSettled(tasks);
+      });
       try {
       result = await browserSession(BrowserFactory, async (page) => {
         activePage = page;
@@ -470,8 +498,7 @@ export async function executeCommand(
         browserRunError = err;
         throw err;
       } finally {
-        process.off('SIGINT', onSigInt);
-        process.off('SIGTERM', onSigTerm);
+        unregisterSignalCleanup();
         activePage = null;
         activeBridge = null;
         // Clear the run identity whether the command succeeded or failed, then
