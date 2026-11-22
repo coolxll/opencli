@@ -28,7 +28,7 @@ import * as os from 'node:os';
 import { executePipeline } from './pipeline/index.js';
 import { adapterLoadError, ArgumentError, CommandExecutionError, SessionBusyError, attachTraceReceipt, getErrorMessage } from './errors.js';
 import { shouldUseBrowserSession } from './capabilityRouting.js';
-import { getBrowserFactory, browserSession, runWithTimeout, DEFAULT_BROWSER_COMMAND_TIMEOUT, type BrowserWindowMode } from './runtime.js';
+import { getBrowserFactory, browserSession, runWithTimeout, DEFAULT_BROWSER_COMMAND_TIMEOUT, type BrowserWindowMode, type IBrowserFactory } from './runtime.js';
 import { profileRouteParams, resolveProfileSelection } from './browser/profile.js';
 import { SLOT_WAIT_DEFAULT_MS, MAX_SLOT_DELAY_MS, parseSlotPolicy, type SlotPolicy } from './site-slots.js';
 import { acquireSiteSlot, clearDaemonRunContext, generateRunId, isUnknownOutcomeError, releaseSiteSessionLease, setDaemonCommandTimeoutSeconds, setDaemonRunContext } from './browser/daemon-client.js';
@@ -299,8 +299,44 @@ export async function executeCommand(
       // finally block below.
       let adapterStillRunning = false as boolean;
       let adapterRun = null as Promise<unknown> | null;
+      let activeBridge = null as IBrowserFactory | null;
+      let activePage = null as IPage | null;
+      let signalHandled = false;
+      const handleTerminationSignal = (signal: 'SIGINT' | 'SIGTERM') => {
+        if (signalHandled) return;
+        signalHandled = true;
+        const exitCode = signal === 'SIGINT' ? 130 : 143;
+        const cleanup = (async () => {
+          const tasks: Promise<unknown>[] = [];
+          if (!keepTab && activePage?.closeWindow) {
+            tasks.push(activePage.closeWindow().catch(() => {}));
+          }
+          if (leaseRun) {
+            setDaemonRunContext(null);
+            tasks.push(
+              releaseSiteSessionLease({ runId: leaseRun.runId, session: leaseRun.session, surface: 'adapter' }).catch(() => {}),
+            );
+          }
+          if (activeBridge) {
+            tasks.push(activeBridge.close().catch(() => {}));
+          }
+          await Promise.allSettled(tasks);
+        })();
+        const timeout = new Promise<void>((resolve) => {
+          const t = setTimeout(resolve, SIGNAL_CLEANUP_TIMEOUT_MS);
+          t.unref?.();
+        });
+        void Promise.race([cleanup, timeout]).finally(() => {
+          process.exit(exitCode);
+        });
+      };
+      const onSigInt = () => handleTerminationSignal('SIGINT');
+      const onSigTerm = () => handleTerminationSignal('SIGTERM');
+      process.on('SIGINT', onSigInt);
+      process.on('SIGTERM', onSigTerm);
       try {
       result = await browserSession(BrowserFactory, async (page) => {
+        activePage = page;
         const observation = traceMode === 'off'
           ? null
           : new ObservationSession({
@@ -429,11 +465,15 @@ export async function executeCommand(
           if (!keepTab) await page.closeWindow?.().catch(() => {});
           throw err;
         }
-      }, { session, ...profileRouting, windowMode, surface: 'adapter', siteSession });
+      }, { session, ...profileRouting, windowMode, surface: 'adapter', siteSession, onBridge: (bridge) => { activeBridge = bridge; } });
       } catch (err) {
         browserRunError = err;
         throw err;
       } finally {
+        process.off('SIGINT', onSigInt);
+        process.off('SIGTERM', onSigTerm);
+        activePage = null;
+        activeBridge = null;
         // Clear the run identity whether the command succeeded or failed, then
         // release the lease so a retry succeeds immediately. Best-effort: TTL
         // reclaims it if the release is lost.
@@ -590,6 +630,7 @@ export function prepareCommandArgs(
  * the runtime kills the Promise.
  */
 const RUNTIME_TIMEOUT_PADDING_SECONDS = 30;
+const SIGNAL_CLEANUP_TIMEOUT_MS = 2000;
 
 function normalizeSiteSession(name: string, raw: unknown): SiteSessionMode | null {
   if (raw === undefined) return null;

@@ -1206,3 +1206,101 @@ describe('executeCommand — site slot pool (OPENCLI_SITE_SLOTS)', () => {
     expect(acquireSpy).toHaveBeenCalledWith(expect.objectContaining({ poolSize: 1, minIntervalMs: 2000, maxIntervalMs: 2000 }));
   });
 });
+
+describe('executeCommand — SIGINT/SIGTERM cleanup', () => {
+  it('cleans up page, lease, and bridge on SIGINT and exits with 130, removing listeners in finally', async () => {
+    const closeWindow = vi.fn().mockResolvedValue(undefined);
+    const bridgeClose = vi.fn().mockResolvedValue(undefined);
+    const mockPage = { closeWindow } as any;
+    const mockBridge = { connect: vi.fn(), close: bridgeClose };
+    const releaseSpy = vi.spyOn(daemonClient, 'releaseSiteSessionLease').mockResolvedValue(undefined);
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+
+    vi.spyOn(capRouting, 'shouldUseBrowserSession').mockReturnValue(true);
+    vi.spyOn(runtime, 'browserSession').mockImplementation(async (_Factory, fn, opts) => {
+      opts?.onBridge?.(mockBridge);
+      return fn(mockPage);
+    });
+
+    const beforeSigInt = process.listenerCount('SIGINT');
+    const beforeSigTerm = process.listenerCount('SIGTERM');
+
+    let finishCmd!: () => void;
+    const cmd = cli({
+      site: 'test-signal',
+      name: 'write-op',
+      access: 'write',
+      description: 'test signal cleanup',
+      browser: true,
+      strategy: Strategy.PUBLIC,
+      siteSession: 'persistent',
+      func: () => new Promise<unknown>((resolve) => {
+        finishCmd = () => resolve([{ ok: true }]);
+      }),
+    });
+
+    const runPromise = executeCommand(cmd, {}, false, { siteSession: 'persistent' });
+    // Wait a tick for browserSession + func to start
+    await new Promise((r) => setTimeout(r, 10));
+    expect(process.listenerCount('SIGINT')).toBe(beforeSigInt + 1);
+    expect(process.listenerCount('SIGTERM')).toBe(beforeSigTerm + 1);
+
+    process.emit('SIGINT', 'SIGINT');
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(releaseSpy).toHaveBeenCalledTimes(1);
+    expect(bridgeClose).toHaveBeenCalledTimes(1);
+    // Persistent session keeps tab open
+    expect(closeWindow).not.toHaveBeenCalled();
+    expect(exitSpy).toHaveBeenCalledWith(130);
+
+    finishCmd();
+    await runPromise;
+
+    expect(process.listenerCount('SIGINT')).toBe(beforeSigInt);
+    expect(process.listenerCount('SIGTERM')).toBe(beforeSigTerm);
+  });
+
+  it('closes ephemeral page and exits with 143 on SIGTERM', async () => {
+    const closeWindow = vi.fn().mockResolvedValue(undefined);
+    const bridgeClose = vi.fn().mockResolvedValue(undefined);
+    const mockPage = { closeWindow } as any;
+    const mockBridge = { connect: vi.fn(), close: bridgeClose };
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+
+    vi.spyOn(capRouting, 'shouldUseBrowserSession').mockReturnValue(true);
+    vi.spyOn(runtime, 'browserSession').mockImplementation(async (_Factory, fn, opts) => {
+      opts?.onBridge?.(mockBridge);
+      return fn(mockPage);
+    });
+
+    const beforeSigTerm = process.listenerCount('SIGTERM');
+    let finishCmd!: () => void;
+    const cmd = cli({
+      site: 'test-signal',
+      name: 'ephemeral-read',
+      access: 'read',
+      description: 'test sigterm cleanup',
+      browser: true,
+      strategy: Strategy.PUBLIC,
+      func: () => new Promise<unknown>((resolve) => {
+        finishCmd = () => resolve([{ ok: true }]);
+      }),
+    });
+
+    const runPromise = executeCommand(cmd, {});
+    await new Promise((r) => setTimeout(r, 10));
+
+    process.emit('SIGTERM', 'SIGTERM');
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(closeWindow).toHaveBeenCalledTimes(1);
+    expect(bridgeClose).toHaveBeenCalledTimes(1);
+    expect(exitSpy).toHaveBeenCalledWith(143);
+
+    finishCmd();
+    await runPromise;
+
+    expect(process.listenerCount('SIGTERM')).toBe(beforeSigTerm);
+  });
+});

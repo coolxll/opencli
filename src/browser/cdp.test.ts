@@ -398,3 +398,55 @@ describe('CDPPage.evaluateOnce', () => {
     vi.unstubAllEnvs();
   });
 });
+
+describe('CDPBridge lifecycle cleanup', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  it('calls close() and allows reconnect after a post-open connect() failure', async () => {
+    vi.stubEnv('OPENCLI_CDP_ENDPOINT', 'ws://127.0.0.1:9222/devtools/page/1');
+    const bridge = new CDPBridge();
+    const closeSpy = vi.spyOn(bridge, 'close');
+    const sendSpy = vi.spyOn(bridge, 'send')
+      .mockRejectedValueOnce(new Error('Page.enable failed'))
+      .mockResolvedValue({});
+
+    await expect(bridge.connect()).rejects.toThrow('Page.enable failed');
+    expect(closeSpy).toHaveBeenCalledTimes(1);
+
+    // Bridge state was reset cleanly, so a subsequent connect() succeeds
+    await expect(bridge.connect()).resolves.toBeDefined();
+    expect(sendSpy).toHaveBeenCalled();
+    await bridge.close();
+  });
+
+  it('rejects pending commands and clears _ws immediately when the socket closes', async () => {
+    vi.stubEnv('OPENCLI_CDP_ENDPOINT', 'ws://127.0.0.1:9222/devtools/page/1');
+    const bridge = new CDPBridge();
+    const sendOrig = bridge.send.bind(bridge);
+    const sendSpy = vi.spyOn(bridge, 'send').mockResolvedValue({});
+    await bridge.connect();
+    sendSpy.mockRestore();
+
+    const pendingCmd = sendOrig('Runtime.evaluate', { expression: '1+1' }, 30_000);
+    MockWebSocket.lastInstance?.emit('close');
+
+    await expect(pendingCmd).rejects.toThrow('CDP connection closed');
+    // Subsequent send fails immediately because _ws was nulled
+    await expect(bridge.send('Runtime.evaluate', { expression: '1' })).rejects.toThrow('CDP connection is not open');
+  });
+
+  it('rejects pending waitForEvent promises and clears their timers on close()', async () => {
+    vi.stubEnv('OPENCLI_CDP_ENDPOINT', 'ws://127.0.0.1:9222/devtools/page/1');
+    const bridge = new CDPBridge();
+    vi.spyOn(bridge, 'send').mockResolvedValue({});
+    await bridge.connect();
+
+    const waiter = bridge.waitForEvent('Page.loadEventFired', 30_000);
+    await bridge.close();
+
+    await expect(waiter).rejects.toThrow('CDP connection closed');
+  });
+});

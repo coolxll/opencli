@@ -56,6 +56,10 @@ export function spawnDaemonProcess(): ChildProcess {
       ...(isWindowsSession0() ? { OPENCLI_WINDOWS_SESSION: '0' } : {}),
     },
   });
+  proc.on('error', () => {
+    // Prevent unhandled 'error' event crashes if spawning fails;
+    // callers detect startup failure via health/status polling.
+  });
   proc.unref();
   return proc;
 }

@@ -157,9 +157,10 @@ export interface IBrowserFactory {
 export async function browserSession<T>(
   BrowserFactory: new () => IBrowserFactory,
   fn: (page: IPage) => Promise<T>,
-  opts: { session?: string; cdpEndpoint?: string; contextId?: string; preferredContextId?: string; idleTimeout?: number; windowMode?: BrowserWindowMode; surface?: BrowserSurface; siteSession?: 'ephemeral' | 'persistent'; workspace?: string } = {},
+  opts: { session?: string; cdpEndpoint?: string; contextId?: string; preferredContextId?: string; idleTimeout?: number; windowMode?: BrowserWindowMode; surface?: BrowserSurface; siteSession?: 'ephemeral' | 'persistent'; workspace?: string; onBridge?: (bridge: IBrowserFactory) => void } = {},
 ): Promise<T> {
   const browser = new BrowserFactory();
+  opts.onBridge?.(browser);
   try {
     const page = await browser.connect({
       timeout: DEFAULT_BROWSER_CONNECT_TIMEOUT,

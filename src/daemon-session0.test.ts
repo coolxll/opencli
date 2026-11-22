@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  DEFAULT_DAEMON_IDLE_TIMEOUT_MS,
   DEFAULT_SESSION0_IDLE_TIMEOUT_MS,
   Session0IdleManager,
+  getDaemonIdleTimeoutMs,
   getSession0IdleTimeoutMs,
 } from './daemon-session0.js';
 
@@ -83,5 +85,43 @@ describe('daemon-session0 idle manager', () => {
 
     vi.advanceTimersByTime(2_000);
     expect(onTimeout).toHaveBeenCalledTimes(1);
+  });
+
+  it('resolves cross-platform OPENCLI_DAEMON_IDLE_TIMEOUT with 0 disabling', () => {
+    expect(getDaemonIdleTimeoutMs({}, false)).toBe(DEFAULT_DAEMON_IDLE_TIMEOUT_MS);
+    expect(getDaemonIdleTimeoutMs({ OPENCLI_DAEMON_IDLE_TIMEOUT: '120' }, false)).toBe(120_000);
+    expect(getDaemonIdleTimeoutMs({ OPENCLI_DAEMON_IDLE_TIMEOUT: '0' }, false)).toBe(0);
+    expect(getDaemonIdleTimeoutMs({ OPENCLI_DAEMON_IDLE_TIMEOUT: 'invalid' }, false)).toBe(DEFAULT_DAEMON_IDLE_TIMEOUT_MS);
+    // Session 0 prefers OPENCLI_SESSION0_IDLE_TIMEOUT, falls back to OPENCLI_DAEMON_IDLE_TIMEOUT
+    expect(getDaemonIdleTimeoutMs({}, true)).toBe(DEFAULT_SESSION0_IDLE_TIMEOUT_MS);
+    expect(getDaemonIdleTimeoutMs({ OPENCLI_SESSION0_IDLE_TIMEOUT: '45', OPENCLI_DAEMON_IDLE_TIMEOUT: '300' }, true)).toBe(45_000);
+    expect(getDaemonIdleTimeoutMs({ OPENCLI_DAEMON_IDLE_TIMEOUT: '300' }, true)).toBe(300_000);
+    expect(getDaemonIdleTimeoutMs({ OPENCLI_DAEMON_IDLE_TIMEOUT: '0' }, true)).toBe(0);
+  });
+
+  it('supports cross-platform enabled mode and respects queued slot waiters', () => {
+    const onTimeout = vi.fn();
+    const manager = new Session0IdleManager({ enabled: true, timeoutMs: 30_000, onTimeout });
+
+    // Queued slot waiter prevents arming even when pendingCount is 0
+    manager.onIdle(0, 1);
+    expect(manager.isArmed).toBe(false);
+    vi.advanceTimersByTime(60_000);
+    expect(onTimeout).not.toHaveBeenCalled();
+
+    // Once both pending and waiters reach 0, timer arms and fires
+    manager.onIdle(0, 0);
+    expect(manager.isArmed).toBe(true);
+    vi.advanceTimersByTime(30_000);
+    expect(onTimeout).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not arm when timeoutMs is 0', () => {
+    const onTimeout = vi.fn();
+    const manager = new Session0IdleManager({ enabled: true, timeoutMs: 0, onTimeout });
+    manager.onIdle(0, 0);
+    expect(manager.isArmed).toBe(false);
+    vi.advanceTimersByTime(60_000);
+    expect(onTimeout).not.toHaveBeenCalled();
   });
 });

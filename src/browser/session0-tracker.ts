@@ -111,21 +111,31 @@ export async function closeBrowserViaCdp(probeUrl: string, timeoutMs: number = 2
 
     return await new Promise<boolean>((resolve) => {
       let settled = false;
+      let timer: ReturnType<typeof setTimeout> | null = null;
+      let closeDelayTimer: ReturnType<typeof setTimeout> | null = null;
       const done = (val: boolean) => {
         if (!settled) {
           settled = true;
+          if (timer) {
+            clearTimeout(timer);
+            timer = null;
+          }
+          if (closeDelayTimer) {
+            clearTimeout(closeDelayTimer);
+            closeDelayTimer = null;
+          }
           try { ws.close(); } catch {}
           resolve(val);
         }
       };
-      const timer = setTimeout(() => done(false), timeoutMs);
+      timer = setTimeout(() => done(false), timeoutMs);
       const ws = new WebSocket(wsUrl);
       ws.once('open', () => {
         try {
           ws.send(JSON.stringify({ id: 1, method: 'Browser.close' }), (err) => {
             if (err) done(false);
             else {
-              setTimeout(() => done(true), 300);
+              closeDelayTimer = setTimeout(() => done(true), 300);
             }
           });
         } catch {
@@ -133,11 +143,9 @@ export async function closeBrowserViaCdp(probeUrl: string, timeoutMs: number = 2
         }
       });
       ws.once('close', () => {
-        clearTimeout(timer);
         done(true);
       });
       ws.once('error', () => {
-        clearTimeout(timer);
         done(false);
       });
     });
@@ -187,9 +195,22 @@ function saveTrackedBrowsers(browsers: TrackedBrowser[]): void {
 }
 
 export function trackBrowserProcess(browser: TrackedBrowser): void {
-  inMemoryTracked.push(browser);
+  const matches = (b: TrackedBrowser) =>
+    (browser.pid !== undefined && b.pid === browser.pid)
+    || (browser.userDataDir !== undefined && b.userDataDir === browser.userDataDir);
+
+  const memIdx = inMemoryTracked.findIndex(matches);
+  if (memIdx >= 0) {
+    inMemoryTracked[memIdx] = browser;
+  } else {
+    inMemoryTracked.push(browser);
+  }
+
   const all = loadTrackedBrowsers();
-  if (!all.some((b) => b.pid === browser.pid && b.userDataDir === browser.userDataDir)) {
+  const allIdx = all.findIndex(matches);
+  if (allIdx >= 0) {
+    all[allIdx] = browser;
+  } else {
     all.push(browser);
   }
   saveTrackedBrowsers(all);

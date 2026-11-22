@@ -349,6 +349,31 @@ export class SlotAdmission {
     return this.deps.scheduler.list(this.now(), this.deps.hasPendingWork);
   }
 
+  waiterCount(): number {
+    return this.waiters.size;
+  }
+
+  hasWaiters(): boolean {
+    return this.waiters.size > 0;
+  }
+
+  cancelAll(reason: string = 'Daemon shutting down.'): void {
+    if (this.wakeTimer !== null) {
+      this.clearTimer(this.wakeTimer);
+      this.wakeTimer = null;
+    }
+    const pendingWaiters = [...this.waiters.entries()];
+    this.waiters.clear();
+    for (const [runId, waiter] of pendingWaiters) {
+      this.clearTimer(waiter.waitTimer);
+      this.deps.scheduler.cancel(runId);
+      waiter.reply({
+        status: 503,
+        body: { ok: false, errorCode: 'daemon_shutting_down', error: reason },
+      });
+    }
+  }
+
   release(runId: string): void {
     this.deps.scheduler.release(runId);
     this.pump();

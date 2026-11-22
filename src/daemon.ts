@@ -30,7 +30,7 @@ import { PKG_VERSION } from './version.js';
 import { DEFAULT_CONTEXT_ID } from './browser/profile.js';
 import { recordExtensionVersion } from './update-check.js';
 import { getWindowsSessionAutostartBlock, isWindowsSession0 } from './windows-session.js';
-import { Session0IdleManager, getSession0IdleTimeoutMs } from './daemon-session0.js';
+import { Session0IdleManager, getDaemonIdleTimeoutMs } from './daemon-session0.js';
 import { closeAllTrackedBrowsers, trackBrowserProcess, type TrackedBrowser } from './browser/session0-tracker.js';
 import {
   PROFILE_DISCONNECTED_HINT,
@@ -62,17 +62,24 @@ if (!isIgnorableDaemonPortEnv(process.env.OPENCLI_DAEMON_PORT)) {
 }
 
 const isSession0 = isWindowsSession0();
+const idleTimeoutMs = getDaemonIdleTimeoutMs(process.env, isSession0);
+let shuttingDown = false;
 const session0IdleManager = new Session0IdleManager({
-  isSession0,
-  timeoutMs: getSession0IdleTimeoutMs(),
+  enabled: idleTimeoutMs > 0,
+  timeoutMs: idleTimeoutMs,
   onTimeout: () => {
-    log.info('[daemon] Windows Session 0 idle timeout reached; initiating shutdown.');
+    log.info(
+      isSession0
+        ? '[daemon] Windows Session 0 idle timeout reached; initiating shutdown.'
+        : '[daemon] Idle timeout reached; initiating shutdown.',
+    );
     void shutdown();
   },
 });
 if (isSession0) {
   log.info(`[daemon] Windows Session 0 detected: idle auto-exit (${session0IdleManager.timeoutMs / 1000}s) and browser lifecycle cleanup enabled.`);
-  session0IdleManager.onIdle(0);
+} else if (idleTimeoutMs > 0) {
+  log.info(`[daemon] Idle auto-exit enabled (${session0IdleManager.timeoutMs / 1000}s).`);
 }
 
 // ─── State ───────────────────────────────────────────────────────────
@@ -130,6 +137,13 @@ const slotAdmission = new SlotAdmission({
   log: (msg) => pushLog({ level: 'info', msg, ts: Date.now() }),
 });
 
+function updateIdleTimer(): void {
+  if (shuttingDown) return;
+  session0IdleManager.onIdle(pending.size, slotAdmission.waiterCount());
+}
+
+updateIdleTimer();
+
 /** A TTL-stale lease holder with a command still in flight is alive, not dead. */
 function runHasPendingWork(runId: string): boolean {
   for (const entry of pending.values()) {
@@ -149,7 +163,7 @@ function settlePending(id: string, entry: PendingEntry, outcome: { data?: unknow
     if (outcome.error) settler.reject(outcome.error);
     else settler.resolve(outcome.data);
   }
-  session0IdleManager.onIdle(pending.size);
+  updateIdleTimer();
 }
 let commandResultUnknownCount = 0;
 // Extension log ring buffer
@@ -458,9 +472,15 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
           reply: ({ status, body: payload }) => {
             replied = true;
             jsonResponse(res, status, { id: body.id, ...payload });
+            updateIdleTimer();
           },
         });
-        res.on('close', () => { if (!replied) cancel(); });
+        res.on('close', () => {
+          if (!replied) {
+            cancel();
+            updateIdleTimer();
+          }
+        });
         return;
       }
 
@@ -558,12 +578,15 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
         };
         try {
           route.connection!.ws.send(JSON.stringify(body), (err?: Error) => {
-            if (err && !entry.dispatched) failBeforeDispatch(err);
+            if (err) {
+              failBeforeDispatch(err);
+              return;
+            }
+            // Once ws flushes the frame, the command may execute even if the
+            // result is later lost; do not downgrade later disconnects to a
+            // pre-dispatch failure just because no result/ack has arrived yet.
+            entry.dispatched = true;
           });
-          // Once ws accepts the frame, the command may execute even if the
-          // result is later lost; do not downgrade later disconnects to a
-          // pre-dispatch failure just because no result/ack has arrived yet.
-          entry.dispatched = true;
         } catch (err) {
           failBeforeDispatch(err);
         }
@@ -578,6 +601,8 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
         ...(commandFailure?.errorCode ? { errorCode: commandFailure.errorCode } : {}),
         ...(commandFailure?.errorHint ? { errorHint: commandFailure.errorHint } : {}),
       });
+    } finally {
+      updateIdleTimer();
     }
     return;
   }
@@ -587,7 +612,26 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
 
 // ─── WebSocket for Extension ─────────────────────────────────────────
 
-const httpServer = createServer((req, res) => { handleRequest(req, res).catch(() => { res.writeHead(500); res.end(); }); });
+const activeSockets = new Map<WebSocket, ReturnType<typeof setInterval>>();
+
+function cleanupSocket(ws: WebSocket): void {
+  const interval = activeSockets.get(ws);
+  if (interval) {
+    clearInterval(interval);
+    activeSockets.delete(ws);
+  }
+}
+
+const httpServer = createServer((req, res) => {
+  handleRequest(req, res).catch(() => {
+    if (!res.headersSent && !res.writableEnded) {
+      res.writeHead(500);
+      res.end();
+    } else if (!res.writableEnded) {
+      res.end();
+    }
+  });
+});
 const wss = new WebSocketServer({
   server: httpServer,
   path: '/ext',
@@ -608,18 +652,19 @@ wss.on('connection', (ws: WebSocket) => {
   let missedPongs = 0;
   const heartbeatInterval = setInterval(() => {
     if (ws.readyState !== WebSocket.OPEN) {
-      clearInterval(heartbeatInterval);
+      cleanupSocket(ws);
       return;
     }
     if (missedPongs >= 2) {
       log.warn('[daemon] Extension heartbeat lost, closing connection');
-      clearInterval(heartbeatInterval);
+      cleanupSocket(ws);
       ws.terminate();
       return;
     }
     missedPongs++;
     ws.ping();
   }, 15000);
+  activeSockets.set(ws, heartbeatInterval);
 
   ws.on('pong', () => {
     missedPongs = 0;
@@ -672,12 +717,12 @@ wss.on('connection', (ws: WebSocket) => {
 
   ws.on('close', () => {
     log.info('[daemon] Extension disconnected');
-    clearInterval(heartbeatInterval);
+    cleanupSocket(ws);
     unregisterExtensionConnection(ws);
   });
 
   ws.on('error', () => {
-    clearInterval(heartbeatInterval);
+    cleanupSocket(ws);
     unregisterExtensionConnection(ws);
   });
 });
@@ -715,7 +760,10 @@ httpServer.on('error', (err: NodeJS.ErrnoException) => {
 
 // Graceful shutdown
 async function shutdown(): Promise<void> {
+  if (shuttingDown) return;
+  shuttingDown = true;
   session0IdleManager.stop();
+  slotAdmission.cancelAll('Daemon shutting down.');
   // Reject all pending requests so the CLI gets a structured response it can
   // act on instead of a socket hang-up it must treat as result-unknown.
   // Not-yet-dispatched commands get the pre-dispatch contract (safe to resend
@@ -736,7 +784,16 @@ async function shutdown(): Promise<void> {
     settlePending(id, p, { error: failure });
   }
   pending.clear();
-  for (const profile of extensionProfiles.values()) profile.ws.close();
+  for (const [ws, interval] of activeSockets) {
+    clearInterval(interval);
+    try { ws.close(); } catch {}
+  }
+  activeSockets.clear();
+  for (const profile of extensionProfiles.values()) {
+    try { profile.ws.close(); } catch {}
+  }
+  extensionProfiles.clear();
+  wss.close();
   try {
     await closeAllTrackedBrowsers();
   } catch (err) {

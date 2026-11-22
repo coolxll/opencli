@@ -252,6 +252,29 @@ describe('SlotAdmission', () => {
     h.admission.release('b');
     expect(h.timers.size).toBe(0);
   });
+
+  it('tracks waiterCount/hasWaiters and cancelAll drains queued waiters and timers', () => {
+    const h = harness({ random: () => 0 });
+    const paced: SlotPolicy = { poolSize: 1, minIntervalMs: 5000, maxIntervalMs: 5000 };
+    expect(h.admission.hasWaiters()).toBe(false);
+    expect(h.admission.waiterCount()).toBe(0);
+
+    h.acquire('a', paced);
+    h.acquire('b', paced, 10_000);
+    h.acquire('c', paced, 10_000);
+    expect(h.admission.hasWaiters()).toBe(true);
+    expect(h.admission.waiterCount()).toBe(2);
+    expect(h.timers.size).toBeGreaterThan(0);
+
+    h.admission.cancelAll('Daemon shutting down.');
+    expect(h.admission.hasWaiters()).toBe(false);
+    expect(h.admission.waiterCount()).toBe(0);
+    expect(h.timers.size).toBe(0);
+    expect(h.replies.get('b')).toEqual([{ status: 503, body: { ok: false, errorCode: 'daemon_shutting_down', error: 'Daemon shutting down.' } }]);
+    expect(h.replies.get('c')).toEqual([{ status: 503, body: { ok: false, errorCode: 'daemon_shutting_down', error: 'Daemon shutting down.' } }]);
+    expect(h.scheduler.isWaiting('b')).toBe(false);
+    expect(h.scheduler.isWaiting('c')).toBe(false);
+  });
 });
 
 describe('SlotAdmission.admitCommand (slot ownership gate)', () => {

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-const mocks = vi.hoisted(() => ({ status: vi.fn(), stop: vi.fn(), restart: vi.fn() }));
+const mocks = vi.hoisted(() => ({ status: vi.fn(), stop: vi.fn(), restart: vi.fn(), waitForStop: vi.fn() }));
 vi.mock('../browser/daemon-transport.js', () => ({ fetchDaemonStatus: mocks.status, requestDaemonShutdown: mocks.stop }));
-vi.mock('../browser/daemon-lifecycle.js', () => ({ restartDaemon: mocks.restart }));
+vi.mock('../browser/daemon-lifecycle.js', () => ({ restartDaemon: mocks.restart, waitForDaemonStop: mocks.waitForStop }));
 import { daemonStatus, daemonStop, daemonRestart } from './daemon.js';
 import { BrowserConnectError, EXIT_CODES } from '../errors.js';
 import { PKG_VERSION } from '../version.js';
@@ -43,9 +43,39 @@ describe('daemon structured output', () => {
     mocks.status.mockResolvedValue(null); await daemonStop();
     expect(result().data).toEqual({ running: false, stopped: false }); expect(mocks.stop).not.toHaveBeenCalled();
   });
-  it('stops a running daemon', async () => {
-    mocks.status.mockResolvedValue(status); mocks.stop.mockResolvedValue(true); await daemonStop();
+  it('stops a running daemon and waits for exit', async () => {
+    mocks.status.mockResolvedValue(status);
+    mocks.stop.mockResolvedValue(true);
+    mocks.waitForStop.mockResolvedValue(true);
+    await daemonStop();
+    expect(mocks.waitForStop).toHaveBeenCalledWith(3000);
     expect(result().data).toEqual({ running: false, stopped: true });
+  });
+  it('falls back to SIGTERM and SIGKILL if daemon does not exit after /shutdown', async () => {
+    mocks.status.mockResolvedValue(status);
+    mocks.stop.mockResolvedValue(true);
+    mocks.waitForStop
+      .mockResolvedValueOnce(false) // after /shutdown
+      .mockResolvedValueOnce(false) // after SIGTERM
+      .mockResolvedValueOnce(true); // after SIGKILL
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true);
+
+    await daemonStop();
+
+    expect(killSpy).toHaveBeenNthCalledWith(1, status.pid, 'SIGTERM');
+    expect(killSpy).toHaveBeenNthCalledWith(2, status.pid, 'SIGKILL');
+    expect(result().data).toEqual({ running: false, stopped: true });
+  });
+  it('reports failure if daemon remains alive after SIGTERM and SIGKILL fallback', async () => {
+    mocks.status.mockResolvedValue(status);
+    mocks.stop.mockResolvedValue(true);
+    mocks.waitForStop.mockResolvedValue(false);
+    vi.spyOn(process, 'kill').mockImplementation(() => true);
+
+    await daemonStop();
+
+    expect(result().error.code).toBe('daemon_stop_failed');
+    expect(process.exitCode).toBe(1);
   });
   it('reports a shutdown failure', async () => {
     mocks.status.mockResolvedValue(status); mocks.stop.mockResolvedValue(false); await daemonStop();

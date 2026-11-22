@@ -54,6 +54,7 @@ export class CDPBridge implements IBrowserFactory {
   private _idCounter = 0;
   private _pending = new Map<number, { resolve: (val: unknown) => void; reject: (err: Error) => void; timer: ReturnType<typeof setTimeout> }>();
   private _eventListeners = new Map<string, Set<(params: unknown) => void>>();
+  private _eventWaiters = new Set<{ event: string; handler: (params: unknown) => void; timer: ReturnType<typeof setTimeout>; reject: (err: Error) => void }>();
 
   async connect(opts?: { timeout?: number; session?: string; cdpEndpoint?: string; contextId?: string; idleTimeout?: number; windowMode?: 'foreground' | 'background'; surface?: 'browser' | 'adapter'; siteSession?: 'ephemeral' | 'persistent' }): Promise<IPage> {
     if (this._ws) throw new Error('CDPBridge is already connected. Call close() before reconnecting.');
@@ -80,8 +81,11 @@ export class CDPBridge implements IBrowserFactory {
 
     return new Promise((resolve, reject) => {
       const ws = new WebSocket(wsUrl);
+      let settled = false;
       const timeoutMs = (opts?.timeout ?? 10) * 1000;
       const timeout = setTimeout(() => {
+        if (settled) return;
+        settled = true;
         this._ws = null;
         ws.close();
         reject(new Error('CDP connect timeout'));
@@ -96,16 +100,38 @@ export class CDPBridge implements IBrowserFactory {
           // Optional caller script for every new document, e.g. state a headless peer cannot share across connections.
           if (initSource !== undefined) await this.send('Page.addScriptToEvaluateOnNewDocument', { source: initSource });
         } catch (err) {
-          ws.close();
-          reject(err instanceof Error ? err : new Error(String(err)));
+          await this.close();
+          if (!settled) {
+            settled = true;
+            reject(err instanceof Error ? err : new Error(String(err)));
+          }
           return;
         }
-        resolve(new CDPPage(this));
+        if (!settled) {
+          settled = true;
+          resolve(new CDPPage(this));
+        }
       });
 
       ws.on('error', (err: Error) => {
         clearTimeout(timeout);
-        reject(err);
+        if (!settled) {
+          settled = true;
+          reject(err);
+        }
+      });
+
+      ws.on('close', () => {
+        clearTimeout(timeout);
+        if (this._ws === ws) {
+          this._ws = null;
+        }
+        this._rejectPending('CDP connection closed');
+        this._rejectEventWaiters('CDP connection closed');
+        if (!settled) {
+          settled = true;
+          reject(new Error('CDP connection closed'));
+        }
       });
 
       ws.on('message', (data: RawData) => {
@@ -137,16 +163,33 @@ export class CDPBridge implements IBrowserFactory {
     });
   }
 
+  private _rejectPending(message: string): void {
+    const entries = [...this._pending.values()];
+    this._pending.clear();
+    for (const p of entries) {
+      clearTimeout(p.timer);
+      p.reject(new Error(message));
+    }
+  }
+
+  private _rejectEventWaiters(message: string): void {
+    const waiters = [...this._eventWaiters];
+    this._eventWaiters.clear();
+    for (const w of waiters) {
+      clearTimeout(w.timer);
+      this.off(w.event, w.handler);
+      w.reject(new Error(message));
+    }
+  }
+
   async close(): Promise<void> {
     if (this._ws) {
-      this._ws.close();
+      const ws = this._ws;
       this._ws = null;
+      ws.close();
     }
-    for (const p of this._pending.values()) {
-      clearTimeout(p.timer);
-      p.reject(new Error('CDP connection closed'));
-    }
-    this._pending.clear();
+    this._rejectPending('CDP connection closed');
+    this._rejectEventWaiters('CDP connection closed');
     this._eventListeners.clear();
   }
 
@@ -180,16 +223,23 @@ export class CDPBridge implements IBrowserFactory {
 
   waitForEvent(event: string, timeoutMs: number = 15_000): Promise<unknown> {
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.off(event, handler);
-        reject(new Error(`Timed out waiting for CDP event '${event}'`));
-      }, timeoutMs);
-      const handler = (params: unknown) => {
-        clearTimeout(timer);
-        this.off(event, handler);
-        resolve(params);
+      const entry = {
+        event,
+        handler: (params: unknown) => {
+          clearTimeout(entry.timer);
+          this._eventWaiters.delete(entry);
+          this.off(event, entry.handler);
+          resolve(params);
+        },
+        timer: setTimeout(() => {
+          this._eventWaiters.delete(entry);
+          this.off(event, entry.handler);
+          reject(new Error(`Timed out waiting for CDP event '${event}'`));
+        }, timeoutMs),
+        reject,
       };
-      this.on(event, handler);
+      this._eventWaiters.add(entry);
+      this.on(event, entry.handler);
     });
   }
 }

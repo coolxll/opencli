@@ -145,4 +145,23 @@ describe('session0-tracker', () => {
 
     expect(loadTrackedBrowsers()).toEqual([]);
   });
+
+  it('deduplicates inMemoryTracked when trackBrowserProcess is called repeatedly for the same browser', () => {
+    trackBrowserProcess({
+      pid: 22222,
+      userDataDir: '/tmp/dup-profile',
+      args: ['--user-data-dir=/tmp/dup-profile'],
+      launchedAt: 1000,
+    });
+    trackBrowserProcess({
+      pid: 22222,
+      userDataDir: '/tmp/dup-profile',
+      args: ['--user-data-dir=/tmp/dup-profile'],
+      launchedAt: 2000,
+    });
+
+    const loaded = loadTrackedBrowsers().filter((b) => b.pid === 22222);
+    expect(loaded).toHaveLength(1);
+    expect(loaded[0]?.launchedAt).toBe(2000);
+  });
 });
